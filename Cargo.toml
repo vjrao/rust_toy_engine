@@ -4,5 +4,12 @@ version = "0.1.0"
 authors = ["rphmeier <rphmeier@gmail.com>"]
 
 [dependencies]
+libc = "*"
 log = "*"
-glutin = "*"
+
+[features]
+default = ["glutin"]
+
+[dependencies.glutin]
+version = "*"
+optional = true

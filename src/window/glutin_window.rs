@@ -24,12 +24,11 @@ impl From<WindowSettings> for GlutinWindow {
 
 impl Window for GlutinWindow {
 	fn new(settings: WindowSettings) -> GlutinWindow {
-		GlutinWindow {
-			internal: glutin::Window::new().unwrap(),
-			title: "".into(),
-			should_close: false,
-			capture_cursor: false,
-		}
+		let builder = glutin::WindowBuilder::new()
+			.with_dimensions(settings.size.width, settings.size.height)
+			.with_title(settings.title)
+			.with_fullscreen(settings.fullscreen);
+			//todo add rest of params
 	}
 
 	fn should_close(&self) -> bool {

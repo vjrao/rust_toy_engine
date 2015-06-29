@@ -30,18 +30,18 @@ impl From<[u32; 2]> for Size {
 }
 
 
-/// Settings for creating a window
+/// Settings for creating a window.
 #[derive(Clone)]
 pub struct WindowSettings {
-	size: Size,
-	title: String,
-	fullscreen: bool,
-	vsync: bool,
-	gl: (u8, u8)
+	pub size: Size,
+	pub title: String,
+	pub fullscreen: bool,
+	pub vsync: bool,
+	pub gl: (u8, u8)
 }
 
 impl WindowSettings {
-	/// Creates a new WindowSettings with default params
+	/// Creates a new WindowSettings with default params.
 	pub fn new() -> WindowSettings {
 		WindowSettings {
 			size: (800, 600).into(),
@@ -52,16 +52,29 @@ impl WindowSettings {
 		}
 	}
 
-	/// Specify a size
-	pub fn size(mut self, s: Size) -> WindowSettings {
-		self.size = s;
-		self
+	/// Specify a size.
+	pub fn with_size(self, s: Size) -> WindowSettings {
+		WindowSettings { size: s, ..self }
 	}
 
-	/// Specify a title
-	pub fn title(mut self, t: String) -> WindowSettings {
-		self.title = t;
-		self
+	/// Specify a title.
+	pub fn with_title(self, t: String) -> WindowSettings {
+		WindowSettings { title: t, ..self }
+	}
+
+	/// Whether the window should be fullscreen.
+	pub fn with_fullscreen(self, f: bool) -> WindowSettings {
+		WindowSettings { fullscreen: f, ..self }
+	}
+
+	/// Whether the window should render in vsync.
+	pub fn with_vsync(self, v: bool) -> WindowSettings {
+		WindowSettings { vsync: v, ..self }
+	}
+
+	/// Specify an OpenGL version for this window to be created with.
+	pub fn with_gl_version(self, v: (u8, u8)) -> WindowSettings {
+		WindowSettings { gl: v, ..self }
 	}
 }
 

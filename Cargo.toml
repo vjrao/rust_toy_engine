@@ -6,10 +6,4 @@ authors = ["rphmeier <rphmeier@gmail.com>"]
 [dependencies]
 libc = "*"
 log = "*"
-
-[features]
-default = ["glutin"]
-
-[dependencies.glutin]
-version = "*"
-optional = true
+glutin = "*"

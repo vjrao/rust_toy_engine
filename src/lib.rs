@@ -1,7 +1,6 @@
+#![feature(test, raw)]
+
 pub mod ecs;
-pub mod window;
+pub mod scene;
 
-extern crate libc;
-
-#[cfg(feature = "glutin")]
-extern crate glutin;
+extern crate test;

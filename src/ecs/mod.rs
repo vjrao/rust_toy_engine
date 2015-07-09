@@ -166,7 +166,8 @@ impl WorldBuilder {
         s
     }
 
-    pub fn create(self) -> World {
+    /// Builds a world from self.
+    pub fn build(self) -> World {
         World {
             entity_manager: EntityManager::new(),
             component_mappers: self.component_mappers
@@ -181,10 +182,10 @@ mod tests {
     #[derive(Debug, Eq, PartialEq)]
     struct Position(i32, i32);
     struct Velocity(i32, i32);
-
+    
     #[test]
     fn build_world() {
-        let world = WorldBuilder::new().create();
+        let world = WorldBuilder::new().build();
     }
 
     #[test]
@@ -192,7 +193,7 @@ mod tests {
         let mut world = 
             WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
-            .create();
+            .build());
         let e = world.entity_manager.next();
 
         {

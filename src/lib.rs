@@ -1,5 +1,3 @@
-#![feature(test, raw)]
+#![feature(raw)]
 
 pub mod ecs;
-
-extern crate test;

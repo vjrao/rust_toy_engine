@@ -2,8 +2,3 @@
 name = "engine"
 version = "0.1.0"
 authors = ["rphmeier <rphmeier@gmail.com>"]
-
-[dependencies]
-libc = "*"
-log = "*"
-glutin = "*"

@@ -1,3 +1,5 @@
+//! An Entity-Component-System
+
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::mem;
@@ -6,7 +8,7 @@ use std::raw::TraitObject;
 
 pub use self::vec_mapper::VecMapper;
 
-mod vec_mapper;
+pub mod vec_mapper;
 
 /// An unique entity.
 /// Entities each have a unique id which serves

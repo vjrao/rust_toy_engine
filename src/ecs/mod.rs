@@ -13,6 +13,9 @@
 //! struct Counter(pub u32);
 //! struct CounterSystem;
 //! impl System for CounterSystem {
+//!     fn dependent_components(&self) -> Vec<ComponentId> {
+//!         vec![Counter::id()]
+//!     }
 //!     fn process(&mut self, entities: &[Entity], mappers: &mut ComponentMappers) {
 //!         let count_mapper = mappers.get_mapper_mut::<Counter>().unwrap();
 //!         for e in entities {
@@ -24,7 +27,7 @@
 //! let mut world = 
 //!     WorldBuilder::new()
 //!     .with_component_mapper(VecMapper::<Counter>::new())
-//!     .with_system(CounterSystem, vec![Counter::id()])
+//!     .with_system(CounterSystem)
 //!     .build();
 //! let e = world.next_entity();
 //! world.get_mapper_mut::<Counter>().unwrap().set(e, Counter(0));
@@ -150,13 +153,14 @@ impl ComponentMappers {
 
 /// Processes entities that contain specific components.
 pub trait System {
+    /// Components that this system depends on to function.
+    fn dependent_components(&self) -> Vec<ComponentId>;
+
     /// Do arbitrary work on the entities supplied to it.
     /// These entities will all implement the traits
     /// this system was registered with.
     fn process(&mut self, &[Entity], &mut ComponentMappers);
 }
-
-struct SysEntry(Box<System>, Vec<ComponentId>);
 
 // Helper function for system processing.
 // Returns a vector of all values in v which are duplicate at least n times.
@@ -177,11 +181,12 @@ fn duplicate_n_times<T: Ord + Eq + Clone>(v: Vec<T>, n: usize) -> Vec<T> {
         let cur_val = &v[i];
         if *prev_val == *cur_val {
             count += 1;
-            if count == n { duplicates.push(cur_val.clone()) } 
         } else {
             prev_val = cur_val;
             count = 1;
         }
+
+        if count == n { duplicates.push(cur_val.clone()) } 
 
         i += 1;
     }
@@ -194,27 +199,27 @@ pub struct World {
     next: Entity,
     entities: HashSet<Entity>,
     component_mappers: ComponentMappers,
-    systems: Vec<SysEntry>,
+    systems: Vec<Box<System>>,
 }
 
 impl World {
     /// Process all the systems in this world in arbitrary order.
     pub fn process_systems(&mut self) {
         for sys in &mut self.systems {
-            if sys.1.len() == 0 { continue; }
+            let comps = sys.dependent_components();
+            let num_components = comps.len();
+            if num_components == 0 { continue; }
             // Find entities which contain requisite component types.
             let mut entities = Vec::new();
-            // the number of components this system depends on.
-            let num_components = sys.1.len();
-            for id in &sys.1 {
+            for id in &comps {
                 entities.append(
                     &mut self.component_mappers.get_handle(id).unwrap().entities()
                 );
             }
-            if sys.1.len() > 1 {
+            if num_components > 1 {
                 entities = duplicate_n_times(entities, num_components);
             }
-            sys.0.process(&entities, &mut self.component_mappers);
+            sys.process(&entities, &mut self.component_mappers);
         }
     }
 
@@ -266,7 +271,7 @@ impl DerefMut for World {
 /// Factory for `World`. 
 pub struct WorldBuilder {
     component_mappers: ComponentMappers,
-    systems: Vec<SysEntry>,
+    systems: Vec<Box<System>>,
 }
 
 impl WorldBuilder {
@@ -290,10 +295,10 @@ impl WorldBuilder {
     }
 
     /// Add a system to this world.
-    pub fn with_system<S>(self, sys: S, components: Vec<ComponentId>) -> WorldBuilder
+    pub fn with_system<S>(self, sys: S) -> WorldBuilder
     where S: System + 'static {
         let mut s = self;
-        s.systems.push(SysEntry(Box::new(sys), components));
+        s.systems.push(Box::new(sys));
         s
     }
 
@@ -320,6 +325,9 @@ mod tests {
 
     struct MovementSystem;
     impl System for MovementSystem {
+        fn dependent_components(&self) -> Vec<ComponentId> {
+            vec![Position::id(), Velocity::id()]
+        }
         fn process(&mut self, entities: &[Entity], mappers: &mut ComponentMappers) {
             // calculate new positions
             let mut new_positions = Vec::new();
@@ -372,7 +380,7 @@ mod tests {
             WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
             .with_component_mapper(VecMapper::<Velocity>::new())
-            .with_system(MovementSystem, vec![Position::id(), Velocity::id()])
+            .with_system(MovementSystem)
             .build();
 
         let has_both = world.next_entity();
@@ -425,7 +433,7 @@ mod tests {
             WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
             .with_component_mapper(VecMapper::<Velocity>::new())
-            .with_system(MovementSystem, vec![Position::id(), Velocity::id()])
+            .with_system(MovementSystem)
             .build();
 
         let before = world.next_entity();

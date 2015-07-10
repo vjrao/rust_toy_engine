@@ -1,3 +1,3 @@
-#![feature(raw)]
+#![feature(raw, append)]
 
 pub mod ecs;

@@ -1,3 +1,13 @@
+//! A default implementation of ComponentMapper.
+//!
+//! This stores all component data in a vector, where
+//! offsets into the vector are stored in a hashmap.
+//! Users of the library may find it is more efficient
+//! to write custom ComponentMapper types.
+//! For example, some kind of spatial partitioning system would likely
+//! be more efficient for storing Position data in many cases, particularly
+//! for collision detection.
+
 use super::{Entity, ComponentMapper, Component};
 use std::collections::HashMap;
 

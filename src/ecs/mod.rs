@@ -1,4 +1,37 @@
 //! An Entity-Component-System
+//! This is designed with a data-oriented approach in mind.
+//! Users of the system can choose how the component data
+//! for any component type they register with the world
+//! is stored in memory.
+//!
+//! #Examples
+//!
+//! ```
+//! use engine::ecs::*;
+//!
+//! #[derive(Eq, PartialEq, Debug)]
+//! struct Counter(pub u32);
+//! struct CounterSystem;
+//! impl System for CounterSystem {
+//!     fn process(&mut self, entities: &[Entity], mappers: &mut ComponentMappers) {
+//!         let count_mapper = mappers.get_mapper_mut::<Counter>().unwrap();
+//!         for e in entities {
+//!            count_mapper.get_mut(*e).unwrap().0 += 1;
+//!         }
+//!     }
+//! }
+//!
+//! let mut world = 
+//!     WorldBuilder::new()
+//!     .with_component_mapper(VecMapper::<Counter>::new())
+//!     .with_system(CounterSystem, vec![Counter::id()])
+//!     .build();
+//! let e = world.next_entity();
+//! world.get_mapper_mut::<Counter>().unwrap().set(e, Counter(0));
+//! world.process_systems();
+//! let new_count = world.get_mapper::<Counter>().unwrap().get(e).unwrap();
+//! assert_eq!(*new_count, Counter(1));
+//! ```
 
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
@@ -127,6 +160,7 @@ struct SysEntry(Box<System>, Vec<ComponentId>);
 
 // Helper function for system processing.
 // Returns a vector of all values in v which are duplicate at least n times.
+#[inline]
 fn duplicate_n_times<T: Ord + Eq + Clone>(v: Vec<T>, n: usize) -> Vec<T> {
     if v.len() == 0 { return v }
     else if n == 0 { return Vec::new() }
@@ -166,10 +200,9 @@ pub struct World {
 impl World {
     /// Process all the systems in this world in arbitrary order.
     pub fn process_systems(&mut self) {
-        //let mut systems = Vec::new();
         for sys in &mut self.systems {
+            if sys.1.len() == 0 { continue; }
             // Find entities which contain requisite component types.
-
             let mut entities = Vec::new();
             // the number of components this system depends on.
             let num_components = sys.1.len();
@@ -178,8 +211,9 @@ impl World {
                     &mut self.component_mappers.get_handle(id).unwrap().entities()
                 );
             }
-            //get duplicates next to each other,
-            entities = duplicate_n_times(entities, num_components);
+            if sys.1.len() > 1 {
+                entities = duplicate_n_times(entities, num_components);
+            }
             sys.0.process(&entities, &mut self.component_mappers);
         }
     }
@@ -394,15 +428,20 @@ mod tests {
             .with_system(MovementSystem, vec![Position::id(), Velocity::id()])
             .build();
 
-        let to_destroy = world.next_entity();
-        world.get_mapper_mut::<Position>().unwrap().set(to_destroy, Position(6, 9));
-        world.get_mapper_mut::<Velocity>().unwrap().set(to_destroy, Velocity(0, 0));
+        let before = world.next_entity();
+        let after = world.next_entity();
+        world.get_mapper_mut::<Position>().unwrap().set(before, Position(6, 9));
+        world.get_mapper_mut::<Velocity>().unwrap().set(before, Velocity(0, 0));
+        world.get_mapper_mut::<Position>().unwrap().set(after, Position(6, 9));
+        world.get_mapper_mut::<Velocity>().unwrap().set(after, Velocity(0, 0));
 
+        world.destroy_entity(before);
         world.process_systems();
+        world.destroy_entity(after);
 
-        world.destroy_entity(to_destroy);
-
-        assert_eq!(world.get_mapper::<Position>().unwrap().get(to_destroy), None);
-        assert_eq!(world.get_mapper::<Velocity>().unwrap().get(to_destroy), None);
+        assert_eq!(world.get_mapper::<Position>().unwrap().get(before), None);
+        assert_eq!(world.get_mapper::<Velocity>().unwrap().get(before), None);
+        assert_eq!(world.get_mapper::<Position>().unwrap().get(after), None);
+        assert_eq!(world.get_mapper::<Velocity>().unwrap().get(after), None);
     }
 }

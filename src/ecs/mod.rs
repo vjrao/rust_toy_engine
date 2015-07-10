@@ -18,50 +18,6 @@ pub struct Entity {
     id: usize,
 }
 
-/// Manages creation and destruction of entities.
-pub struct EntityManager {
-    next: Entity,
-    entities: HashSet<Entity>,
-}
-
-impl EntityManager {
-    /// Creates a new `EntityManager`.
-    pub fn new() -> EntityManager {
-        EntityManager { 
-            next: Entity { id: 0 },
-            entities: HashSet::new(),
-        }
-    }
-    /// Creates an entity.
-    pub fn next(&mut self) -> Entity {
-        while self.is_alive(self.next) {
-            self.next.id += 1;
-        }
-        self.entities.insert(self.next);
-        self.next
-    }
-
-    /// Creates a vector of n entities.
-    pub fn next_n(&mut self, n: usize) -> Vec<Entity> {
-        let mut entities = Vec::with_capacity(n);
-        for _ in 0..n {
-            entities.push(self.next());
-        }
-        entities
-    }
-
-    /// Whether an entity is currently "alive", or exists.
-    pub fn is_alive(&self, e: Entity) -> bool {
-        self.entities.contains(&e)
-    }
-
-    /// Destroy an entity.
-    pub fn destroy(&mut self, e: Entity) {
-        self.entities.remove(&e);
-    }
-
-}
-
 #[derive(Eq, PartialEq, Hash)]
 ///A unique id for every component.
 pub struct ComponentId(TypeId);
@@ -89,22 +45,18 @@ pub trait ComponentMapper {
     fn remove(&mut self, e: Entity);
     /// Get a list of all entities this manages.
     fn entities(&self) -> Vec<Entity>;
-    /// Prune dead entities from this mapper.
-    fn prune(&mut self, em: &EntityManager);
 }
 
 // Contains conduits for `ComponentMapper` methods which are not generic.
 trait ComponentMapperExt: 'static {
     fn remove(&mut self, e: Entity);
     fn entities(&self) -> Vec<Entity>;
-    fn prune(&mut self, em: &EntityManager);
 }
 
 impl<T, M> ComponentMapperExt for M
 where T: Component, M: ComponentMapper<Component=T> + 'static {
     fn remove(&mut self, e: Entity) { M::remove(self, e) }
     fn entities(&self) -> Vec<Entity> { M::entities(self) }
-    fn prune(&mut self, em: &EntityManager) { M::prune(self, em) }
 }
 
 /// used to maintain ownership of the mapper so it destructs properly,
@@ -205,7 +157,8 @@ fn duplicate_n_times<T: Ord + Eq + Clone>(v: Vec<T>, n: usize) -> Vec<T> {
 
 /// The world ties together entities, components, and systems.
 pub struct World {
-    pub entity_manager: EntityManager,
+    next: Entity,
+    entities: HashSet<Entity>,
     component_mappers: ComponentMappers,
     systems: Vec<SysEntry>,
 }
@@ -228,6 +181,37 @@ impl World {
             //get duplicates next to each other,
             entities = duplicate_n_times(entities, num_components);
             sys.0.process(&entities, &mut self.component_mappers);
+        }
+    }
+
+    /// Creates an entity.
+    pub fn next_entity(&mut self) -> Entity {
+        while self.is_alive(self.next) {
+            self.next.id += 1;
+        }
+        self.entities.insert(self.next);
+        self.next
+    }
+
+    /// Creates a vector of n entities.
+    pub fn next_n_entities(&mut self, n: usize) -> Vec<Entity> {
+        let mut entities = Vec::with_capacity(n);
+        for _ in 0..n {
+            entities.push(self.next_entity());
+        }
+        entities
+    }
+
+    /// Whether an entity is currently "alive", or exists.
+    pub fn is_alive(&self, e: Entity) -> bool {
+        self.entities.contains(&e)
+    }
+
+    /// Destroy an entity.
+    pub fn destroy_entity(&mut self, e: Entity) {
+        self.entities.remove(&e);
+        for (_, h) in self.component_mappers.0.iter_mut() {
+            h.handle.remove(e);
         }
     }
 }
@@ -282,7 +266,8 @@ impl WorldBuilder {
     /// Builds a world from self.
     pub fn build(self) -> World {
         World {
-            entity_manager: EntityManager::new(),
+            next: Entity { id: 0 },
+            entities: HashSet::new(),
             component_mappers: self.component_mappers,
             systems: self.systems
         }
@@ -335,7 +320,7 @@ mod tests {
             WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
             .build();
-        let e = world.entity_manager.next();
+        let e = world.next_entity();
 
         {
             let mut pos_mapper = world.get_mapper_mut::<Position>().unwrap();
@@ -356,9 +341,9 @@ mod tests {
             .with_system(MovementSystem, vec![Position::id(), Velocity::id()])
             .build();
 
-        let has_both = world.entity_manager.next();
-        let has_pos_only = world.entity_manager.next();
-        let has_vel_only = world.entity_manager.next();
+        let has_both = world.next_entity();
+        let has_pos_only = world.next_entity();
+        let has_vel_only = world.next_entity();
 
         {
             let mut pos_mapper = world.get_mapper_mut::<Position>().unwrap();
@@ -398,5 +383,26 @@ mod tests {
     fn get_nonexistent_mapper_mut() {
         let mut world = WorldBuilder::new().build();
         world.get_mapper_mut::<Position>().expect("Unable to unwrap mut mapper.");
+    }
+
+    #[test]
+    fn destroy_entity() {
+        let mut world = 
+            WorldBuilder::new()
+            .with_component_mapper(VecMapper::<Position>::new())
+            .with_component_mapper(VecMapper::<Velocity>::new())
+            .with_system(MovementSystem, vec![Position::id(), Velocity::id()])
+            .build();
+
+        let to_destroy = world.next_entity();
+        world.get_mapper_mut::<Position>().unwrap().set(to_destroy, Position(6, 9));
+        world.get_mapper_mut::<Velocity>().unwrap().set(to_destroy, Velocity(0, 0));
+
+        world.process_systems();
+
+        world.destroy_entity(to_destroy);
+
+        assert_eq!(world.get_mapper::<Position>().unwrap().get(to_destroy), None);
+        assert_eq!(world.get_mapper::<Velocity>().unwrap().get(to_destroy), None);
     }
 }

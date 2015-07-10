@@ -1,4 +1,4 @@
-use super::{Entity, ComponentMapper, Component, EntityManager};
+use super::{Entity, ComponentMapper, Component};
 use std::collections::HashMap;
 
 /// Default implementation of a component mapper.
@@ -63,19 +63,5 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
 
     fn entities(&self) -> Vec<Entity> {
         self.offsets.keys().cloned().collect()
-    }
-
-    fn prune(&mut self, em: &EntityManager) {
-        let mut to_prune = Vec::new();
-        for key in self.offsets.keys() {
-            let entity = key.clone();
-            if !em.is_alive(entity) {
-                to_prune.push(entity);
-            }
-        }
-
-        for e in to_prune {
-            self.remove(e);
-        }
     }
 }

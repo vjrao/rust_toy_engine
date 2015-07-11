@@ -117,6 +117,10 @@ impl MapperHandle {
     }
 }
 
+pub trait Prototype {
+    fn initialize(&self, Entity, &mut ComponentMappers);
+}
+
 /// Stores all component mappers.
 pub struct ComponentMappers(HashMap<ComponentId, MapperHandle>);
 
@@ -232,14 +236,32 @@ impl World {
         self.next
     }
 
+    /// Creates an entity, initializing it with a prototype.
+    pub fn next_entity_prototyped<P: Prototype>(&mut self, proto: &P) -> Entity {
+        let e = self.next_entity();
+        proto.initialize(e, &mut self.component_mappers);
+        e
+    }
+
     /// Creates a vector of n entities.
-    pub fn next_n_entities(&mut self, n: usize) -> Vec<Entity> {
+    pub fn next_entities(&mut self, n: usize) -> Vec<Entity> {
         let mut entities = Vec::with_capacity(n);
         for _ in 0..n {
             entities.push(self.next_entity());
         }
         entities
     }
+
+    /// Creates n entities, initialized with a prototype.
+    pub fn next_entities_prototyped<P>(&mut self, n: usize, proto: P) -> Vec<Entity>
+    where P: Prototype {
+        let entities = self.next_entities(n);
+        for e in &entities {
+            proto.initialize(*e, &mut self.component_mappers);
+        }
+        entities
+    }
+
 
     /// Whether an entity is currently "alive", or exists.
     pub fn is_alive(&self, e: Entity) -> bool {

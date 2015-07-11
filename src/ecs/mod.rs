@@ -203,6 +203,7 @@ mod tests {
             }
         }
     }
+
     #[test]
     #[allow(unused_variables)]
     fn build_world() {
@@ -304,5 +305,25 @@ mod tests {
         assert_eq!(world.get_mapper::<Velocity>().unwrap().get(before), None);
         assert_eq!(world.get_mapper::<Position>().unwrap().get(after), None);
         assert_eq!(world.get_mapper::<Velocity>().unwrap().get(after), None);
+    }
+
+    #[test]
+    fn prototype_initialization() {
+        struct PositionProto(i32, i32);
+        impl Prototype for PositionProto {
+            fn initialize(&self, e: Entity, mappers: &mut ComponentMappers) {
+                mappers.get_mapper_mut().unwrap().set(e, Position(self.0, self.1));
+            }
+        }
+
+        let mut world = 
+            WorldBuilder::new()
+            .with_component_mapper(VecMapper::<Position>::new())
+            .build();
+
+        let origin_proto = PositionProto(0, 0);
+        let e = world.next_entity_prototyped(&origin_proto);
+
+        assert_eq!(*world.get_mapper::<Position>().unwrap().get(e).unwrap(), Position(0, 0));
     }
 }

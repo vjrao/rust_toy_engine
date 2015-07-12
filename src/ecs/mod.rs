@@ -148,6 +148,11 @@ impl ComponentMappers {
         }
     }
 
+    /// Whether this has a mapper for a specific component type. 
+    pub fn has_component<T: Component>(&self) -> bool {
+        self.0.contains_key(&T::id())
+    }
+
     fn get_handle(&self, id: &ComponentId) -> Option<&ComponentMapperExt> {
         match self.0.get(id) {
             Some(h) => Some(&*h.handle),

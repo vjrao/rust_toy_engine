@@ -109,7 +109,7 @@ impl MapperHandle {
     where T: Component, M: ComponentMapper<Component=T> + 'static {
         let mapper = Box::new(mapper);
         let obj: TraitObject = unsafe {
-            mem::transmute(&*mapper as &ComponentMapper<Component=T>)
+            mem::transmute(&mut *mapper as &mut ComponentMapper<Component=T>)
         };
         MapperHandle {
             obj: obj,
@@ -140,7 +140,7 @@ impl ComponentMappers {
     /// Get a mutable reference to the component mapper for this type.
     pub fn get_mapper_mut<T: Component>(&mut self)
                                 -> Option<&mut ComponentMapper<Component=T>> {
-        match self.0.get(&T::id()) {
+        match self.0.get_mut(&T::id()) {
             Some(h) => {
                 Some( unsafe { mem::transmute(h.obj) } )
             }

@@ -107,7 +107,7 @@ impl MapperHandle {
     /// Create a `MapperHandle` from a mapper.
     fn from_mapper<T, M>(mapper: M) -> MapperHandle
     where T: Component, M: ComponentMapper<Component=T> + 'static {
-        let mapper = Box::new(mapper);
+        let mut mapper = Box::new(mapper);
         let obj: TraitObject = unsafe {
             mem::transmute(&mut *mapper as &mut ComponentMapper<Component=T>)
         };

@@ -27,8 +27,9 @@ impl World {
     pub fn process_systems(&mut self) {
         for sys in &mut self.systems {
             let mut counts: HashMap<Entity, usize> = HashMap::new();
+            let comps = sys.dependent_components();
             let mut entity_vecs = Vec::new();
-            for c in sys.dependent_components() {
+            for c in &comps {
                 entity_vecs.push(
                     &self.component_mappers
                     .get_handle(c)

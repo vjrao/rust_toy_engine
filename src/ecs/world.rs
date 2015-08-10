@@ -26,14 +26,17 @@ impl World {
     /// Process all the systems in this world in arbitrary order.
     pub fn process_systems(&mut self) {
         for sys in &mut self.systems {
-            let comps = sys.dependent_components();
             let mut counts: HashMap<Entity, usize> = HashMap::new();
-            for entity in comps.iter().flat_map(|c|
-                (&mut self.component_mappers)
-                .get_handle(c)
-                .unwrap()
-                .entities()
-                .into_iter()
+            let mut entity_vecs = Vec::new();
+            for c in sys.dependent_components() {
+                entity_vecs.push(
+                    &self.component_mappers
+                    .get_handle(c)
+                    .unwrap()
+                    .entities())
+            }
+            for entity in entity_vecs.into_iter().flat_map(|v|
+                v.into_iter()
             ) {
                 let counter = counts.entry(entity).or_insert(0);
                 *counter += 1;

@@ -26,19 +26,31 @@ impl World {
     /// Process all the systems in this world in arbitrary order.
     pub fn process_systems(&mut self) {
         for sys in &mut self.systems {
+            let mut counts: HashMap<Entity, usize> = HashMap::new();
             let comps = sys.dependent_components();
-            let num_components = comps.len();
-            if num_components == 0 { continue; }
-            // Find entities which contain requisite component types.
-            let mut entities = Vec::new();
-            for id in &comps {
-                entities.append(
-                    &mut self.component_mappers.get_handle(id).unwrap().entities()
+            let mut entity_vecs = Vec::new();
+            for c in &comps {
+                entity_vecs.push(
+                    self.component_mappers
+                    .get_handle(c)
+                    .unwrap()
+                    .entities()
                 );
             }
-            if num_components > 1 {
-                entities = duplicate_n_times(entities, num_components);
+            for entity in entity_vecs.into_iter().flat_map(|v|
+                v.into_iter()
+            ) {
+                let counter = counts.entry(entity).or_insert(0);
+                *counter += 1;
             }
+            
+            let entities = counts.iter().filter_map(|(e, c)|
+                if *c == comps.len() { Some(*e) }
+                else { None }
+            ).collect::<Vec<_>>();
+            
+            if entities.len() == 0 { continue }
+            
             sys.process(&entities, &mut self.component_mappers);
         }
     }
@@ -104,38 +116,6 @@ impl DerefMut for World {
     fn deref_mut(&mut self) -> &mut ComponentMappers {
         &mut self.component_mappers
     }
-}
-
-// Helper function for system processing.
-// Returns a vector of all values in v which are duplicate at least n times.
-#[inline]
-fn duplicate_n_times<T: Ord + Eq + Clone>(v: Vec<T>, n: usize) -> Vec<T> {
-    if v.len() == 0 { return v }
-    else if n == 0 { return Vec::new() }
-
-    let mut v = v;
-    let mut duplicates = Vec::new();
-
-    v.sort_by(|a, b| a.cmp(b));
-
-    let mut i = 1;
-    let mut prev_val = &v[0];
-    let mut count = 1;
-    while i < v.len() {
-        let cur_val = &v[i];
-        if *prev_val == *cur_val {
-            count += 1;
-        } else {
-            prev_val = cur_val;
-            count = 1;
-        }
-
-        if count == n { duplicates.push(cur_val.clone()) } 
-
-        i += 1;
-    }
-
-    duplicates
 }
 
 /// Factory for `World`. 

@@ -28,16 +28,15 @@ impl World {
         for sys in &mut self.systems {
             let comps = sys.dependent_components();
             let mut counts: HashMap<Entity, usize> = HashMap::new();
-            for entity_vecs in comps.iter().map(|c|
+            for entity in comps.iter().flat_map(|c|
                 self.component_mappers
                 .get_handle(c)
                 .unwrap()
                 .entities()
+                .into_iter()
             ) {
-                for e in entity_vecs.iter() {
-                    let counter = counts.entry(e).or_insert(0);
-                    *counter += 1;
-                }
+                let counter = counts.entry(entity).or_insert(0);
+                *counter += 1;
             }
             
             let entities = counts.iter().filter_map(|(e, c)|

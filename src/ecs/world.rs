@@ -29,7 +29,7 @@ impl World {
             let comps = sys.dependent_components();
             let mut counts: HashMap<Entity, usize> = HashMap::new();
             for entity in comps.iter().flat_map(|c|
-                self.component_mappers
+                (&mut self.component_mappers)
                 .get_handle(c)
                 .unwrap()
                 .entities()

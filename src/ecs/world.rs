@@ -31,7 +31,7 @@ impl World {
             let mut entity_vecs = Vec::new();
             for c in &comps {
                 entity_vecs.push(
-                    &self.component_mappers
+                    self.component_mappers
                     .get_handle(c)
                     .unwrap()
                     .entities()

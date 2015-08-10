@@ -40,7 +40,7 @@ impl World {
             for entity in entity_vecs.into_iter().flat_map(|v|
                 v.into_iter()
             ) {
-                let counter = counts.entry(*entity).or_insert(0);
+                let counter = counts.entry(entity).or_insert(0);
                 *counter += 1;
             }
             

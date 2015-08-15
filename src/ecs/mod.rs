@@ -39,7 +39,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::mem;
-use std::raw::TraitObject;
 
 pub use self::vec_mapper::VecMapper;
 pub use self::world::{World, WorldBuilder};
@@ -97,9 +96,10 @@ where T: Component, M: ComponentMapper<Component=T> + 'static {
 }
 
 /// used to maintain ownership of the mapper so it destructs properly,
-/// while storing a `TraitObject` for runtime polymorphism.
+/// while storing a pair of pointers to 
+///the trait object's data and vtable for runtime polymorphism.
 struct MapperHandle {
-    obj: TraitObject,
+    obj: (*mut (), *mut ()),
     handle: Box<ComponentMapperExt>,
 }
 
@@ -107,9 +107,9 @@ impl MapperHandle {
     /// Create a `MapperHandle` from a mapper.
     fn from_mapper<T, M>(mapper: M) -> MapperHandle
     where T: Component, M: ComponentMapper<Component=T> + 'static {
-        let mapper = Box::new(mapper);
-        let obj: TraitObject = unsafe {
-            mem::transmute(&*mapper as &ComponentMapper<Component=T>)
+        let mut mapper = Box::new(mapper);
+        let obj: (*mut (), *mut ()) = unsafe {
+            mem::transmute(&mut *mapper as &mut ComponentMapper<Component=T>)
         };
         MapperHandle {
             obj: obj,
@@ -140,7 +140,7 @@ impl ComponentMappers {
     /// Get a mutable reference to the component mapper for this type.
     pub fn get_mapper_mut<T: Component>(&mut self)
                                 -> Option<&mut ComponentMapper<Component=T>> {
-        match self.0.get(&T::id()) {
+        match self.0.get_mut(&T::id()) {
             Some(h) => {
                 Some( unsafe { mem::transmute(h.obj) } )
             }

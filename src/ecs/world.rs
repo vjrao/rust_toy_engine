@@ -14,22 +14,19 @@ use super::{
     Prototype
 };
 
-/// The `World` ties together entities, components, and systems.
-pub struct World {
+/// Manages the creation and destruction of entities.
+pub struct EntityManager {
     next: Entity,
     entities: HashSet<Entity>,
-    component_mappers: ComponentMappers,
-    systems: Vec<Box<System>>,
 }
 
-impl World {
-    /// Process all the systems in this world in arbitrary order.
-    pub fn process_systems(&mut self) {
-        for sys in &mut self.systems {
-            sys.process(&mut self.component_mappers);
+impl EntityManager {
+    pub fn new() -> Self {
+        EntityManager {
+            next: Entity { id: 0 },
+            entities: HashSet::new()
         }
     }
-
     /// Creates an entity.
     pub fn next_entity(&mut self) -> Entity {
         while self.is_alive(self.next) {
@@ -37,13 +34,6 @@ impl World {
         }
         self.entities.insert(self.next);
         self.next
-    }
-
-    /// Creates an entity, initializing it with a prototype.
-    pub fn next_entity_prototyped<P: Prototype>(&mut self, proto: &P) -> Entity {
-        let e = self.next_entity();
-        proto.initialize(e, &mut self.component_mappers);
-        e
     }
 
     /// Creates a vector of n entities.
@@ -55,17 +45,6 @@ impl World {
         entities
     }
 
-    /// Creates n entities, initialized with a prototype.
-    pub fn next_entities_prototyped<P>(&mut self, n: usize, proto: P) -> Vec<Entity>
-    where P: Prototype {
-        let entities = self.next_entities(n);
-        for e in &entities {
-            proto.initialize(*e, &mut self.component_mappers);
-        }
-        entities
-    }
-
-
     /// Whether an entity is currently "alive", or exists.
     pub fn is_alive(&self, e: Entity) -> bool {
         self.entities.contains(&e)
@@ -74,8 +53,21 @@ impl World {
     /// Destroy an entity.
     pub fn destroy_entity(&mut self, e: Entity) {
         self.entities.remove(&e);
-        for (_, h) in self.component_mappers.0.iter_mut() {
-            h.mapper.remove(e);
+    }
+}
+
+/// The `World` ties together entities, components, and systems.
+pub struct World {
+    entity_manager: EntityManager,
+    component_mappers: ComponentMappers,
+    systems: Vec<Box<System>>,
+}
+
+impl World {
+    /// Process all the systems in this world in arbitrary order.
+    pub fn process_systems(&mut self) {
+        for sys in &mut self.systems {
+            sys.process(&self.component_mappers, &self.entity_manager);
         }
     }
 }
@@ -130,8 +122,7 @@ impl WorldBuilder {
     /// Builds a world from self.
     pub fn build(self) -> World {
         World {
-            next: Entity { id: 0 },
-            entities: HashSet::new(),
+            entity_manager: EntityManager::new(),
             component_mappers: self.component_mappers,
             systems: self.systems
         }

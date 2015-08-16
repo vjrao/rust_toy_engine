@@ -39,7 +39,7 @@ use std::mem;
 
 pub use self::iter::*;
 pub use self::vec_mapper::VecMapper;
-pub use self::world::{World, WorldBuilder};
+pub use self::world::{World, WorldBuilder, EntityManager};
 
 pub mod iter;
 pub mod vec_mapper;
@@ -73,7 +73,8 @@ pub trait ComponentMapper {
     /// Get a vector of all the entities this manages.
     fn entities(&self) -> Vec<Entity>;
     /// Get a vector of all the entities this manages which fit the supplied filter.
-    fn entities_filtered(&self, f: <Self::Component as Component>::Filter) -> Vec<Entity>;
+    fn entities_filtered(&self, f: <Self::Component as Component>::Filter)
+    -> Vec<Entity>;
 }
 
 // Contains conduits for `ComponentMapper` methods which are not generic.
@@ -127,7 +128,7 @@ impl ComponentMappers {
 /// Processes entities that contain specific components.
 pub trait System {
     /// Does arbitrary work with the world.
-    fn process(&mut self, &mut ComponentMappers);
+    fn process(&mut self, &ComponentMappers, &EntityManager);
 }
 
 /// Used to initialize new entities with a specific set of components.

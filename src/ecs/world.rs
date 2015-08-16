@@ -1,7 +1,7 @@
 //! Provides `World` and `WorldBuilder` functionality.
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 
 use super::{
@@ -9,9 +9,7 @@ use super::{
     ComponentMapper,
     ComponentMappers,
     Entity,
-    MapperHandle,
     System,
-    Prototype
 };
 
 /// Manages the creation and destruction of entities.
@@ -95,7 +93,7 @@ impl WorldBuilder {
     /// Create a new `WorldBuilder`.
     pub fn new() -> WorldBuilder {
         WorldBuilder { 
-            component_mappers: ComponentMappers(HashMap::new()),
+            component_mappers: ComponentMappers::new(),
             systems: Vec::new() 
         }
     }
@@ -104,10 +102,7 @@ impl WorldBuilder {
     pub fn with_component_mapper<T, M>(self, mapper: M) -> WorldBuilder
     where T: Component, M: ComponentMapper<Component=T> + Any {
         let mut s = self;
-        s.component_mappers.0.insert(
-            ::std::any::TypeId::of::<M::Component>(),
-            MapperHandle::from_mapper(mapper)
-        );
+        s.component_mappers.insert(mapper);
         s
     }
 

@@ -74,4 +74,9 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
     fn entities(&self) -> Vec<Entity> {
         self.offsets.keys().cloned().collect()
     }
+
+    fn entities_filtered(&self, filter: T::Filter) -> Vec<Entity> {
+        // stub: this is not expected behavior
+        self.entities()
+    }
 }

@@ -26,32 +26,7 @@ impl World {
     /// Process all the systems in this world in arbitrary order.
     pub fn process_systems(&mut self) {
         for sys in &mut self.systems {
-            let mut counts: HashMap<Entity, usize> = HashMap::new();
-            let comps = sys.dependent_components();
-            let mut entity_vecs = Vec::new();
-            for c in &comps {
-                entity_vecs.push(
-                    self.component_mappers
-                    .get_handle(c)
-                    .unwrap()
-                    .entities()
-                );
-            }
-            for entity in entity_vecs.into_iter().flat_map(|v|
-                v.into_iter()
-            ) {
-                let counter = counts.entry(entity).or_insert(0);
-                *counter += 1;
-            }
-            
-            let entities = counts.iter().filter_map(|(e, c)|
-                if *c == comps.len() { Some(*e) }
-                else { None }
-            ).collect::<Vec<_>>();
-            
-            if entities.len() == 0 { continue }
-            
-            sys.process(&entities, &mut self.component_mappers);
+            sys.process(&mut self.component_mappers);
         }
     }
 
@@ -100,7 +75,7 @@ impl World {
     pub fn destroy_entity(&mut self, e: Entity) {
         self.entities.remove(&e);
         for (_, h) in self.component_mappers.0.iter_mut() {
-            h.handle.remove(e);
+            h.mapper.remove(e);
         }
     }
 }
@@ -138,7 +113,7 @@ impl WorldBuilder {
     where T: Component, M: ComponentMapper<Component=T> + Any {
         let mut s = self;
         s.component_mappers.0.insert(
-            M::Component::id(),
+            ::std::any::TypeId::of::<M::Component>(),
             MapperHandle::from_mapper(mapper)
         );
         s

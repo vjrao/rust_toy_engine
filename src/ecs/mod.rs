@@ -13,9 +13,6 @@
 //! struct Counter(pub u32);
 //! struct CounterSystem;
 //! impl System for CounterSystem {
-//!     fn dependent_components(&self) -> Vec<ComponentId> {
-//!         vec![Counter::id()]
-//!     }
 //!     fn process(&mut self, entities: &[Entity], mappers: &mut ComponentMappers) {
 //!         let count_mapper = mappers.get_mapper_mut::<Counter>().unwrap();
 //!         for e in entities {
@@ -35,14 +32,16 @@
 //! let new_count = world.get_mapper::<Counter>().unwrap().get(e).unwrap();
 //! assert_eq!(*new_count, Counter(1));
 //! ```
-
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::raw::TraitObject;
 use std::mem;
 
+pub use self::iter::*;
 pub use self::vec_mapper::VecMapper;
 pub use self::world::{World, WorldBuilder};
 
+pub mod iter;
 pub mod vec_mapper;
 pub mod world;
 
@@ -54,122 +53,86 @@ pub struct Entity {
     id: usize,
 }
 
-#[derive(Eq, PartialEq, Hash)]
-///A unique id for every component.
-pub struct ComponentId(TypeId);
-
 /// A rust component type is any static type.
-pub trait Component: Any { 
-    /// Get the unique `ComponentId` for this type.
-    fn id() -> ComponentId {
-        ComponentId(TypeId::of::<Self>())
-    }
+pub trait Component: Any {
+    type Filter;
 }
-impl<T: Any> Component for T {}
 
 /// Maps entities to component data.
 pub trait ComponentMapper {
     type Component: Component;
     
-    /// Sets the component data for a specific entity.
-    fn set(&mut self, e: Entity, c: Self::Component);
     /// Get an immutable reference to an entity's component data.
     fn get(&self, e: Entity) -> Option<&Self::Component>;
     /// Get a mutable reference to an entity's component data.
     fn get_mut(&mut self, e: Entity) -> Option<&mut Self::Component>;
+    /// Sets the component data for a specific entity.
+    fn set(&mut self, e: Entity, c: Self::Component);
     /// Stop managing component data for this entity.
     fn remove(&mut self, e: Entity);
-    /// Get a list of all entities this manages.
+    /// Get a vector of all the entities this manages.
     fn entities(&self) -> Vec<Entity>;
+    /// Get a vector of all the entities this manages which fit the supplied filter.
+    fn entities_filtered(&self, f: <Self::Component as Component>::Filter) -> Vec<Entity>;
 }
 
 // Contains conduits for `ComponentMapper` methods which are not generic.
 trait ComponentMapperExt: 'static {
     fn remove(&mut self, e: Entity);
-    fn entities(&self) -> Vec<Entity>;
 }
 
 impl<T, M> ComponentMapperExt for M
 where T: Component, M: ComponentMapper<Component=T> + 'static {
     fn remove(&mut self, e: Entity) { M::remove(self, e) }
-    fn entities(&self) -> Vec<Entity> { M::entities(self) }
 }
 
-/// used to maintain ownership of the mapper so it destructs properly,
-/// while storing a pair of pointers to 
-///the trait object's data and vtable for runtime polymorphism.
 struct MapperHandle {
-    obj: (*mut (), *mut ()),
-    handle: Box<ComponentMapperExt>,
+    obj: TraitObject,
+    mapper: Box<ComponentMapperExt>,
 }
 
 impl MapperHandle {
-    /// Create a `MapperHandle` from a mapper.
-    fn from_mapper<T, M>(mapper: M) -> MapperHandle
-    where T: Component, M: ComponentMapper<Component=T> + 'static {
+    fn from_mapper<C, M>(mapper: M) -> Self 
+    where C: Component, M: ComponentMapper<Component=C> + 'static {
         let mut mapper = Box::new(mapper);
-        let obj: (*mut (), *mut ()) = unsafe {
-            mem::transmute(&mut *mapper as &mut ComponentMapper<Component=T>)
-        };
+        let obj: TraitObject = unsafe 
+            { mem::transmute(&mut *mapper as &mut ComponentMapper<Component=C>) };
         MapperHandle {
             obj: obj,
-            handle: mapper as Box<ComponentMapperExt>
+            mapper: mapper as Box<ComponentMapperExt>
         }
     }
 }
-
-pub trait Prototype {
-    fn initialize(&self, Entity, &mut ComponentMappers);
-}
-
 /// Stores all component mappers.
-pub struct ComponentMappers(HashMap<ComponentId, MapperHandle>);
+pub struct ComponentMappers(HashMap<TypeId, MapperHandle>);
 
 impl ComponentMappers {
     /// Get an immutable reference to the component mapper for this type.
-    pub fn get_mapper<T: Component>(&self)
+    fn get_mapper<T: Component>(&self)
                                 -> Option<&ComponentMapper<Component=T>> {
-        match self.0.get(&T::id()) {
-            Some(h) => {
-                Some( unsafe { mem::transmute(h.obj) } )
-            }
-            None => None
-        }
+        self.0.get(&TypeId::of::<T>()).map(|h|
+            unsafe { mem::transmute_copy(&h.obj) }
+        )
     }
 
     /// Get a mutable reference to the component mapper for this type.
-    pub fn get_mapper_mut<T: Component>(&mut self)
+    fn get_mapper_mut<T: Component>(&mut self)
                                 -> Option<&mut ComponentMapper<Component=T>> {
-        match self.0.get_mut(&T::id()) {
-            Some(h) => {
-                Some( unsafe { mem::transmute(h.obj) } )
-            }
-            None => None
-        }
-    }
-
-    /// Whether this has a mapper for a specific component type. 
-    pub fn has_component<T: Component>(&self) -> bool {
-        self.0.contains_key(&T::id())
-    }
-
-    fn get_handle(&self, id: &ComponentId) -> Option<&ComponentMapperExt> {
-        match self.0.get(id) {
-            Some(h) => Some(&*h.handle),
-            None => None
-        }
+        self.0.get_mut(&TypeId::of::<T>()).map(|h|
+            unsafe { mem::transmute_copy(&h.obj) }
+        )
     }
 }
 
 /// Processes entities that contain specific components.
 pub trait System {
-    /// Components that this system depends on to function.
-    fn dependent_components(&self) -> Vec<ComponentId>;
+    /// Does arbitrary work with the world.
+    fn process(&mut self, &mut ComponentMappers);
+}
 
-    /// Do arbitrary work on the entities supplied to it.
-    /// These entities will all implement the traits
-    /// this system was registered with.
-    fn process(&mut self, &[Entity], &mut ComponentMappers);
+/// Used to initialize new entities with a specific set of components.
+pub trait Prototype {
+    fn initialize(&self, Entity, &mut ComponentMappers);
 }
 
 #[cfg(test)]
@@ -183,10 +146,7 @@ mod tests {
 
     struct MovementSystem;
     impl System for MovementSystem {
-        fn dependent_components(&self) -> Vec<ComponentId> {
-            vec![Position::id(), Velocity::id()]
-        }
-        fn process(&mut self, entities: &[Entity], mappers: &mut ComponentMappers) {
+        fn process(&mut self, mappers: &mut ComponentMappers) {
             // calculate new positions
             let mut new_positions = Vec::new();
             {

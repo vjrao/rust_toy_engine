@@ -1,3 +1,3 @@
-#![feature(core, raw, unboxed_closures)]
+#![feature(raw)]
 
 pub mod ecs;

@@ -32,14 +32,12 @@
 //! let new_count = world.get_mapper::<Counter>().unwrap().get(e).unwrap();
 //! assert_eq!(*new_count, Counter(1));
 //! ```
-use std::any::{Any, TypeId};
+use std::any::Any;
 
-pub use self::iter::*;
 pub use self::mapper::{ComponentMapper, ComponentMappers};
 pub use self::vec_mapper::VecMapper;
 pub use self::world::{World, WorldBuilder, EntityManager};
 
-pub mod iter;
 pub mod mapper;
 pub mod vec_mapper;
 pub mod world;
@@ -53,8 +51,13 @@ pub struct Entity {
 }
 
 /// A rust component type is any static type.
-pub trait Component: Any {
+pub trait Component: Any {}
+
+/// A component which can be filtered by its properties.
+pub trait Filterable: Component {
     type Filter;
+    /// Whether this component is accepted by this filter.
+    fn is_accepted_by(&self, filter: &Self::Filter) -> bool;
 }
 
 /// Processes entities that contain specific components.

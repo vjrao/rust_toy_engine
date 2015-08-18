@@ -1,3 +1,5 @@
+//! Mechanisms for handling component data for entities.
+
 use super::{
     Component,
     Filterable,
@@ -6,6 +8,7 @@ use super::{
 
 use std::any::TypeId;
 use std::mem;
+use std::ops::Index;
 use std::raw::TraitObject;
 use std::collections::HashMap;
 
@@ -26,6 +29,19 @@ pub trait ComponentMapper {
     /// Get a vector of all the entities this manages which fit the supplied filter.
     fn entities_filtered(&self, f: &<Self::Component as Filterable>::Filter)
     -> Vec<Entity> where Self::Component: Filterable;
+}
+
+impl<T: Component> Index<Entity> for ComponentMapper<Component=T> {
+    type Output = T;
+
+    /// Indexes into the component mapper.
+    /// This should only be used when an entity is known to have
+    /// the component.
+    fn index<'a>(&'a self, e: Entity) -> &'a T {
+        let opt = self.get(e);
+        debug_assert!(opt.is_some());
+        opt.unwrap()
+    }
 }
 
 struct MapperHandle {
@@ -142,6 +158,8 @@ impl<'a> EntityQuery<'a> {
     }
 }
 
+/// The implementation of IntoIterator for EntityQuery executes
+/// the query on the mappers.
 impl<'a> IntoIterator for EntityQuery<'a> {
     type Item = Entity;
     type IntoIter = <Vec<Entity> as IntoIterator>::IntoIter;

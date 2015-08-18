@@ -13,7 +13,11 @@
 //! struct Counter(pub u32);
 //! struct CounterSystem;
 //! impl System for CounterSystem {
-//!     fn process(&mut self, entities: &[Entity], mappers: &mut ComponentMappers) {
+//!     fn process(&mut self, mappers: &ComponentMappers, em: &EntityManager) {
+//!         let entities: Vec<Entity> = 
+//!             mappers.query()
+//!             .with_component::<Counter>()
+//!             .into_iter().collect();
 //!         let count_mapper = mappers.get_mapper_mut::<Counter>().unwrap();
 //!         for e in entities {
 //!            count_mapper.get_mut(*e).unwrap().0 += 1;
@@ -29,7 +33,7 @@
 //! let e = world.next_entity();
 //! world.get_mapper_mut::<Counter>().unwrap().set(e, Counter(0));
 //! world.process_systems();
-//! let new_count = world.get_mapper::<Counter>().unwrap().get(e).unwrap();
+//! let new_count = world.get_mapper::<Counter>()[e].unwrap();
 //! assert_eq!(*new_count, Counter(1));
 //! ```
 use std::any::Any;
@@ -53,11 +57,46 @@ pub struct Entity {
 /// A rust component type is any static type.
 pub trait Component: Any {}
 
+impl<T: Any> Component for T {}
+
 /// A component which can be filtered by its properties.
 pub trait Filterable: Component {
     type Filter;
     /// Whether this component is accepted by this filter.
     fn is_accepted_by(&self, filter: &Self::Filter) -> bool;
+}
+
+/// A component which can be edited.
+pub trait Editable: Component {
+    type Edit: ComponentEdit;
+}
+
+/// An edit that can be applied to a component.
+///
+/// This is the only way changes can be made to component data.
+/// they are grouped into two categories:
+/// 
+/// - Commutative, which can be combined in arbitrary order and yield the same result.
+///
+/// - Non-commutative, which cannot be combined.
+///
+/// It is the responsibility of the implementor of this trait to ensure that
+/// the combine_with function behaves as expected.
+pub unsafe trait ComponentEdit {
+    /// The type of component this edit operates on.
+    type Item: Editable;
+    /// Combines two commutative edits together.
+    /// This function will only be called with two edits which are commutative.
+    ///
+    /// `a.combine_with(b)` and `b.combine_with(a)` must yield the same result.
+    fn combine_with(self, other: Self) -> Self;
+
+    /// Whether this edit is commutative, or can be applied in arbitrary order
+    /// with other commutative edits and yield the same result.
+    fn is_commutative(&self) -> bool;
+
+    /// Apply this edit to a component.
+    fn apply(&self, &mut Self::Item);
 }
 
 /// Processes entities that contain specific components.
@@ -82,23 +121,25 @@ mod tests {
 
     struct MovementSystem;
     impl System for MovementSystem {
-        fn process(&mut self, mappers: &mut ComponentMappers) {
+        fn process(&mut self, mappers: &ComponentMappers, em: &EntityManager) {
             // calculate new positions
             let mut new_positions = Vec::new();
             {
-                let pos_mapper = mappers.get_mapper::<Position>().unwrap();
-                let vel_mapper = mappers.get_mapper::<Velocity>().unwrap();
-                for e in entities {
-                    let pos = pos_mapper.get(*e).unwrap();
-                    let vel = vel_mapper.get(*e).unwrap();
+                let pos_mapper = mappers.get_mapper::<Position>();
+                let vel_mapper = mappers.get_mapper::<Velocity>();
+                for e in mappers.query()
+                .with_component::<Position>()
+                .with_component::<Velocity>() {
+                    let pos = pos_mapper[e];
+                    let vel = vel_mapper[e];
 
                     let new_pos = Position(pos.0 + vel.0, pos.1 + vel.1);
-                    new_positions.push((*e, new_pos));
+                    new_positions.push((e, new_pos));
                 }
             }
 
             // set new positions.
-            let mut pos_mapper = mappers.get_mapper_mut::<Position>().unwrap();
+            let mut pos_mapper = mappers.get_mapper_mut::<Position>();
             for (e, pos) in new_positions {
                 pos_mapper.set(e, pos);
             }
@@ -120,13 +161,12 @@ mod tests {
         let e = world.next_entity();
 
         {
-            let mut pos_mapper = world.get_mapper_mut::<Position>().unwrap();
+            let mut pos_mapper = world.get_mapper_mut::<Position>();
             pos_mapper.set(e, Position(6, 9))
         }
 
-        let pos_mapper = world.get_mapper::<Position>().unwrap();
-        let pos = pos_mapper.get(e).unwrap();
-        assert_eq!(*pos, Position(6, 9));
+        let pos_mapper = world.get_mapper::<Position>();
+        assert_eq!(*pos_mapper[e], Position(6, 9));
     }
 
     #[test]
@@ -143,29 +183,29 @@ mod tests {
         let has_vel_only = world.next_entity();
 
         {
-            let mut pos_mapper = world.get_mapper_mut::<Position>().unwrap();
+            let mut pos_mapper = world.get_mapper_mut::<Position>();
             pos_mapper.set(has_both, Position(0, 0));
             pos_mapper.set(has_pos_only, Position(0, 0))
         }
         {
-            let mut vel_mapper = world.get_mapper_mut::<Velocity>().unwrap();
+            let mut vel_mapper = world.get_mapper_mut::<Velocity>();
             vel_mapper.set(has_both, Velocity(3, 4));
             vel_mapper.set(has_vel_only, Velocity(0, 0));
         }
 
         world.process_systems();
 
-        let pos_mapper = world.get_mapper::<Position>().unwrap();
-        let vel_mapper = world.get_mapper::<Velocity>().unwrap();
+        let pos_mapper = world.get_mapper::<Position>();
+        let vel_mapper = world.get_mapper::<Velocity>();
 
-        assert_eq!(*pos_mapper.get(has_both).unwrap(), Position(3, 4));
-        assert_eq!(*vel_mapper.get(has_both).unwrap(), Velocity(3, 4));
+        assert_eq!(*pos_mapper[has_both], Position(3, 4));
+        assert_eq!(*vel_mapper[has_both], Velocity(3, 4));
 
-        assert_eq!(*pos_mapper.get(has_pos_only).unwrap(), Position(0, 0));
+        assert_eq!(*pos_mapper[has_pos_only], Position(0, 0));
         assert_eq!(vel_mapper.get(has_pos_only), None);
 
         assert_eq!(pos_mapper.get(has_vel_only), None);
-        assert_eq!(*vel_mapper.get(has_vel_only).unwrap(), Velocity(0, 0));
+        assert_eq!(*vel_mapper[has_vel_only], Velocity(0, 0));
     }
 
     #[test]
@@ -193,19 +233,19 @@ mod tests {
 
         let before = world.next_entity();
         let after = world.next_entity();
-        world.get_mapper_mut::<Position>().unwrap().set(before, Position(6, 9));
-        world.get_mapper_mut::<Velocity>().unwrap().set(before, Velocity(0, 0));
-        world.get_mapper_mut::<Position>().unwrap().set(after, Position(6, 9));
-        world.get_mapper_mut::<Velocity>().unwrap().set(after, Velocity(0, 0));
+        world.get_mapper_mut::<Position>().set(before, Position(6, 9));
+        world.get_mapper_mut::<Velocity>().set(before, Velocity(0, 0));
+        world.get_mapper_mut::<Position>().set(after, Position(6, 9));
+        world.get_mapper_mut::<Velocity>().set(after, Velocity(0, 0));
 
         world.destroy_entity(before);
         world.process_systems();
         world.destroy_entity(after);
 
-        assert_eq!(world.get_mapper::<Position>().unwrap().get(before), None);
-        assert_eq!(world.get_mapper::<Velocity>().unwrap().get(before), None);
-        assert_eq!(world.get_mapper::<Position>().unwrap().get(after), None);
-        assert_eq!(world.get_mapper::<Velocity>().unwrap().get(after), None);
+        assert_eq!(world.get_mapper::<Position>().get(before), None);
+        assert_eq!(world.get_mapper::<Velocity>().get(before), None);
+        assert_eq!(world.get_mapper::<Position>().get(after), None);
+        assert_eq!(world.get_mapper::<Velocity>().get(after), None);
     }
 
     #[test]
@@ -213,7 +253,7 @@ mod tests {
         struct PositionProto(i32, i32);
         impl Prototype for PositionProto {
             fn initialize(&self, e: Entity, mappers: &mut ComponentMappers) {
-                mappers.get_mapper_mut().unwrap().set(e, Position(self.0, self.1));
+                mappers.get_mapper_mut().set(e, Position(self.0, self.1));
             }
         }
 
@@ -225,6 +265,6 @@ mod tests {
         let origin_proto = PositionProto(0, 0);
         let e = world.next_entity_prototyped(&origin_proto);
 
-        assert_eq!(*world.get_mapper::<Position>().unwrap().get(e).unwrap(), Position(0, 0));
+        assert_eq!(*world.get_mapper::<Position>()[e], Position(0, 0));
     }
 }

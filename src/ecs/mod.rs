@@ -331,6 +331,9 @@ mod tests {
 
     #[bench]
     fn bench_general(b: &mut Bencher) {
+        // two part bench:
+        // each iteration adds 1000 new entities with a position
+        // and translates every existing position by (1,1)
         let mut world = WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
             .with_system(PositionCreator)

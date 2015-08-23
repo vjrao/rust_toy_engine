@@ -84,6 +84,8 @@ impl Drop for EntityCreationGuard {
     }
 }
 
+// a type-independent trait for TypedEditHolder that works well with
+// the channels for deferred processing.
 pub trait EditHolder {
     fn push(&mut self, Entity, Box<Any>);
     fn apply(&self, &mut ComponentMappers);

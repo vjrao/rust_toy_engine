@@ -1,4 +1,4 @@
-//! A default implementation of ComponentMapper.
+//! A default and generic implementation of ComponentMapper.
 //!
 //! This stores all component data in a vector, where
 //! offsets into the vector are stored in a hashmap.
@@ -11,7 +11,7 @@
 use super::{ComponentMapper, Component, Entity, Filterable};
 use std::collections::HashMap;
 
-/// Default implementation of a component mapper.
+/// Default, generic, implementation of a component mapper.
 /// It is backed by a vector and designed to be cache-friendly.
 /// This should be sufficient for most component types.
 pub struct VecMapper<T> {

@@ -36,13 +36,15 @@
 //! let new_count = world.get_mapper::<Counter>()[e].unwrap();
 //! assert_eq!(*new_count, Counter(1));
 //! ```
-use std::any::Any;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::mem;
+use std::ops::Index;
+use std::raw::TraitObject;
 
-pub use self::mapper::{ComponentMapper, ComponentMappers};
 pub use self::vec_mapper::VecMapper;
-pub use self::world::{World, WorldBuilder, EntityManager};
+pub use self::world::{EntityManager, World, WorldBuilder, WorldHandle};
 
-pub mod mapper;
 pub mod vec_mapper;
 pub mod world;
 
@@ -54,10 +56,10 @@ pub struct Entity {
     id: usize,
 }
 
-/// A rust component type is any static type.
-pub trait Component: Any {}
+/// A rust component type is any static type that can be cloned.
+pub trait Component: Any + Clone {}
 
-impl<T: Any> Component for T {}
+impl<T: Any + Clone> Component for T {}
 
 /// A component which can be filtered by its properties.
 pub trait Filterable: Component {
@@ -68,7 +70,7 @@ pub trait Filterable: Component {
 
 /// A component which can be edited.
 pub trait Editable: Component {
-    type Edit: ComponentEdit;
+    type Edit: ComponentEdit<Item=Self> + Any;
 }
 
 /// An edit that can be applied to a component.
@@ -81,7 +83,8 @@ pub trait Editable: Component {
 /// - Non-commutative, which cannot be combined.
 ///
 /// It is the responsibility of the implementor of this trait to ensure that
-/// the combine_with function behaves as expected.
+/// the combine_with function behaves as expected and that only commutative
+/// edits are identified as such.
 pub unsafe trait ComponentEdit {
     /// The type of component this edit operates on.
     type Item: Editable;
@@ -102,169 +105,237 @@ pub unsafe trait ComponentEdit {
 /// Processes entities that contain specific components.
 pub trait System {
     /// Does arbitrary work with the world.
-    fn process(&mut self, &ComponentMappers, &EntityManager);
+    fn process(&mut self, &WorldHandle);
 }
 
 /// Used to initialize new entities with a specific set of components.
 pub trait Prototype {
-    fn initialize(&self, Entity, &mut ComponentMappers);
+    fn initialize(&self, &mut ComponentMappers, Entity);
+}
+
+/// Maps entities to component data.
+pub trait ComponentMapper {
+    type Component: Component;
+    
+    /// Get an immutable reference to an entity's component data.
+    fn get(&self, e: Entity) -> Option<&Self::Component>;
+    /// Get a mutable reference to an entity's component data.
+    fn get_mut(&mut self, e: Entity) -> Option<&mut Self::Component>;
+    /// Sets the component data for a specific entity.
+    fn set(&mut self, e: Entity, c: Self::Component);
+    /// Stop managing component data for this entity.
+    fn remove(&mut self, e: Entity);
+    /// Get a vector of all the entities this manages.
+    fn entities(&self) -> Vec<Entity>;
+    /// Get a vector of all the entities this manages which fit the supplied filter.
+    fn entities_filtered(&self, f: &<Self::Component as Filterable>::Filter)
+    -> Vec<Entity> where Self::Component: Filterable;
+}
+
+impl<T: Component> Index<Entity> for ComponentMapper<Component=T> {
+    type Output = T;
+
+    /// Indexes into the component mapper.
+    /// This should only be used when an entity is known to have
+    /// the component.
+    fn index<'a>(&'a self, e: Entity) -> &'a T {
+        let opt = self.get(e);
+        debug_assert!(opt.is_some());
+        opt.unwrap()
+    }
+}
+
+struct MapperHandle {
+    obj: TraitObject,
+    mapper: Box<Any> // used to ensure destructor is run.
+}
+
+impl MapperHandle {
+    fn from_mapper<C, M: Any>(mapper: M) -> Self 
+    where C: Component, M: ComponentMapper<Component=C> + 'static {
+        let mut mapper = Box::new(mapper);
+        let obj: TraitObject = unsafe 
+            { mem::transmute(&mut *mapper as &mut ComponentMapper<Component=C>) };
+        MapperHandle {
+            obj: obj,
+            mapper: mapper as Box<Any>
+        }
+    }
+}
+
+/// Stores all component mappers.
+pub struct ComponentMappers(HashMap<TypeId, MapperHandle>);
+
+impl ComponentMappers {
+    fn new() -> Self {
+        ComponentMappers(HashMap::new())
+    }
+
+    /// insert a component mapper into 
+    pub fn insert<T, M: Any>(&mut self, mapper: M)
+    where T: Component, M: ComponentMapper<Component=T> + 'static {
+        self.0.insert(TypeId::of::<T>(), MapperHandle::from_mapper(mapper));
+    }
+
+    /// Get an immutable reference to the component mapper for this type.
+    pub fn get_mapper<T: Component>(&self)
+                                -> &ComponentMapper<Component=T> {
+        let mapper: Option<&ComponentMapper<Component=T>>
+        = self.0.get(&TypeId::of::<T>()).map(|h|
+            unsafe { 
+                mem::transmute_copy(&h.obj) 
+            }
+        );
+        debug_assert!(mapper.is_some());
+        mapper.unwrap()
+    }
+
+    /// Get a mutable reference to the component mapper for this type.
+    pub fn get_mapper_mut<T: Component>(&mut self)
+                                -> &mut ComponentMapper<Component=T> {
+        let mapper: Option<&mut ComponentMapper<Component=T>>
+        = self.0.get_mut(&TypeId::of::<T>()).map(|h|
+            unsafe {mem::transmute_copy(&h.obj) }
+        );
+        debug_assert!(mapper.is_some());
+        mapper.unwrap()
+    }
+}
+
+/// A builder for entity queries.
+pub struct EntityQuery<'a> {
+    mappers: &'a ComponentMappers,
+    em: &'a EntityManager,
+    num_components: usize,
+    candidates: Vec<Vec<Entity>>,
+    disallowed: Vec<Vec<Entity>>,
+}
+
+impl<'a> EntityQuery<'a> {
+    /// Causes this query to only return entities with a component of type `C`.
+    pub fn with_component<C>(mut self) -> Self
+    where C: Component {
+        let mapper = self.mappers.get_mapper::<C>();
+
+        self.candidates.push(mapper.entities());
+        self.num_components += 1;
+
+        self
+    }
+
+    /// Causes this query to only return entities with a component of type `C`,
+    /// Filtered with the associated filter.
+    pub fn with_component_filtered<C, F>(mut self, filter: C::Filter) -> Self
+    where C: Filterable {
+        let mapper = self.mappers.get_mapper::<C>();
+        self.candidates.push(mapper.entities_filtered(&filter));
+        self.num_components += 1;
+
+        self
+    }
+
+    /// Causes this query to only return entities without a component of type `C`.
+    pub fn without_component<C>(mut self) -> Self
+    where C: Component {
+        let mapper = self.mappers.get_mapper::<C>();
+        self.disallowed.push(mapper.entities());
+        self
+    }
+}
+
+/// The implementation of IntoIterator for EntityQuery executes
+/// the query on the mappers.
+impl<'a> IntoIterator for EntityQuery<'a> {
+    type Item = Entity;
+    type IntoIter = <Vec<Entity> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let mut map = HashMap::new();
+        let mut entities = Vec::new();
+
+        // find the intersection between all the candidate lists
+        for e in self.candidates.iter().flat_map(|v| v.iter()) {
+            let i = map.entry(e).or_insert(0usize);
+            *i += 1;
+        }
+
+        // but ensure that no disallowed entities will be included.
+        for e in self.disallowed.iter().flat_map(|v| v.iter()) {
+            map.insert(e, 0);
+        }
+
+        // collect all entities in the intersection
+        for (e, i) in map {
+            if i == self.num_components && self.em.is_alive(*e) {
+                entities.push(*e)
+            }
+        }
+
+        entities.into_iter()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::test::Bencher;
 
-    #[derive(Debug, Eq, PartialEq)]
-    struct Position(pub i32, pub i32);
-    #[derive(Debug, Eq, PartialEq)]
-    struct Velocity(pub i32, pub i32);
+    const NEW_ENTITIES: usize = 1000;
 
-    struct MovementSystem;
-    impl System for MovementSystem {
-        fn process(&mut self, mappers: &ComponentMappers, em: &EntityManager) {
-            // calculate new positions
-            let mut new_positions = Vec::new();
-            {
-                let pos_mapper = mappers.get_mapper::<Position>();
-                let vel_mapper = mappers.get_mapper::<Velocity>();
-                for e in mappers.query()
-                .with_component::<Position>()
-                .with_component::<Velocity>() {
-                    let pos = pos_mapper[e];
-                    let vel = vel_mapper[e];
+    #[derive(Clone)]
+    struct Position {
+        x: i32,
+        y: i32,
+    }
 
-                    let new_pos = Position(pos.0 + vel.0, pos.1 + vel.1);
-                    new_positions.push((e, new_pos));
-                }
-            }
+    struct Translate {
+        x: i32,
+        y: i32,
+    }
 
-            // set new positions.
-            let mut pos_mapper = mappers.get_mapper_mut::<Position>();
-            for (e, pos) in new_positions {
-                pos_mapper.set(e, pos);
-            }
+    struct PositionCreator;
+    impl System for PositionCreator {
+        fn process(&mut self, handle: &WorldHandle) {
+            // create 1000 new entities.
+            handle.next_entities(NEW_ENTITIES).with_component(Position { x: 0, y: 0 });
         }
     }
 
-    #[test]
-    #[allow(unused_variables)]
-    fn build_world() {
-        let world = WorldBuilder::new().build();
-    }
-
-    #[test]
-    fn get_and_set_value() {
-        let mut world = 
-            WorldBuilder::new()
-            .with_component_mapper(VecMapper::<Position>::new())
-            .build();
-        let e = world.next_entity();
-
-        {
-            let mut pos_mapper = world.get_mapper_mut::<Position>();
-            pos_mapper.set(e, Position(6, 9))
-        }
-
-        let pos_mapper = world.get_mapper::<Position>();
-        assert_eq!(*pos_mapper[e], Position(6, 9));
-    }
-
-    #[test]
-    fn test_simple_system() {
-        let mut world = 
-            WorldBuilder::new()
-            .with_component_mapper(VecMapper::<Position>::new())
-            .with_component_mapper(VecMapper::<Velocity>::new())
-            .with_system(MovementSystem)
-            .build();
-
-        let has_both = world.next_entity();
-        let has_pos_only = world.next_entity();
-        let has_vel_only = world.next_entity();
-
-        {
-            let mut pos_mapper = world.get_mapper_mut::<Position>();
-            pos_mapper.set(has_both, Position(0, 0));
-            pos_mapper.set(has_pos_only, Position(0, 0))
-        }
-        {
-            let mut vel_mapper = world.get_mapper_mut::<Velocity>();
-            vel_mapper.set(has_both, Velocity(3, 4));
-            vel_mapper.set(has_vel_only, Velocity(0, 0));
-        }
-
-        world.process_systems();
-
-        let pos_mapper = world.get_mapper::<Position>();
-        let vel_mapper = world.get_mapper::<Velocity>();
-
-        assert_eq!(*pos_mapper[has_both], Position(3, 4));
-        assert_eq!(*vel_mapper[has_both], Velocity(3, 4));
-
-        assert_eq!(*pos_mapper[has_pos_only], Position(0, 0));
-        assert_eq!(vel_mapper.get(has_pos_only), None);
-
-        assert_eq!(pos_mapper.get(has_vel_only), None);
-        assert_eq!(*vel_mapper[has_vel_only], Velocity(0, 0));
-    }
-
-    #[test]
-    #[should_panic]
-    fn get_nonexistent_mapper() {
-        let world = WorldBuilder::new().build();
-        world.get_mapper::<Position>().expect("Unable to unwrap mapper.");
-    }
-
-    #[test]
-    #[should_panic]
-    fn get_nonexistent_mapper_mut() {
-        let mut world = WorldBuilder::new().build();
-        world.get_mapper_mut::<Position>().expect("Unable to unwrap mut mapper.");
-    }
-
-    #[test]
-    fn destroy_entity() {
-        let mut world = 
-            WorldBuilder::new()
-            .with_component_mapper(VecMapper::<Position>::new())
-            .with_component_mapper(VecMapper::<Velocity>::new())
-            .with_system(MovementSystem)
-            .build();
-
-        let before = world.next_entity();
-        let after = world.next_entity();
-        world.get_mapper_mut::<Position>().set(before, Position(6, 9));
-        world.get_mapper_mut::<Velocity>().set(before, Velocity(0, 0));
-        world.get_mapper_mut::<Position>().set(after, Position(6, 9));
-        world.get_mapper_mut::<Velocity>().set(after, Velocity(0, 0));
-
-        world.destroy_entity(before);
-        world.process_systems();
-        world.destroy_entity(after);
-
-        assert_eq!(world.get_mapper::<Position>().get(before), None);
-        assert_eq!(world.get_mapper::<Velocity>().get(before), None);
-        assert_eq!(world.get_mapper::<Position>().get(after), None);
-        assert_eq!(world.get_mapper::<Velocity>().get(after), None);
-    }
-
-    #[test]
-    fn prototype_initialization() {
-        struct PositionProto(i32, i32);
-        impl Prototype for PositionProto {
-            fn initialize(&self, e: Entity, mappers: &mut ComponentMappers) {
-                mappers.get_mapper_mut().set(e, Position(self.0, self.1));
+    struct PositionTranslator;
+    impl System for PositionTranslator {
+        fn process(&mut self, handle: &WorldHandle) {
+            for e in handle.query().with_component::<Position>() {
+                handle.submit_change::<Position>(e, Translate { x: 1, y: 1 });
             }
         }
+    }
+    unsafe impl ComponentEdit for Translate {
+        type Item = Position;
 
-        let mut world = 
-            WorldBuilder::new()
+        fn is_commutative(&self) -> bool { true }
+        fn combine_with(self, other: Translate) -> Translate {
+            Translate {
+                x: self.x + other.x,
+                y: self.y + other.y,
+            }
+        }
+        fn apply(&self, pos: &mut Position) {
+            pos.x += self.x;
+            pos.y += self.y;
+        }
+    }
+
+    impl Editable for Position {
+        type Edit = Translate; // only translations are allowed.
+    }
+
+    #[bench]
+    fn bench_general(b: &mut Bencher) {
+        let mut world = WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
+            .with_system(PositionCreator)
+            .with_system(PositionTranslator)
             .build();
-
-        let origin_proto = PositionProto(0, 0);
-        let e = world.next_entity_prototyped(&origin_proto);
-
-        assert_eq!(*world.get_mapper::<Position>()[e], Position(0, 0));
+        b.iter(|| world.process_systems());
     }
 }

@@ -61,13 +61,6 @@ pub trait Component: Any + Clone {}
 
 impl<T: Any + Clone> Component for T {}
 
-/// A component which can be filtered by its properties.
-pub trait Filterable: Component {
-    type Filter;
-    /// Whether this component is accepted by this filter.
-    fn is_accepted_by(&self, filter: &Self::Filter) -> bool;
-}
-
 /// A component which can be edited.
 pub trait Editable: Component {
     type Edit: ComponentEdit<Item=Self> + Any;
@@ -127,9 +120,6 @@ pub trait ComponentMapper {
     fn remove(&mut self, e: Entity);
     /// Get a vector of all the entities this manages.
     fn entities(&self) -> Vec<Entity>;
-    /// Get a vector of all the entities this manages which fit the supplied filter.
-    fn entities_filtered(&self, f: &<Self::Component as Filterable>::Filter)
-    -> Vec<Entity> where Self::Component: Filterable;
 }
 
 impl<T: Component> Index<Entity> for ComponentMapper<Component=T> {
@@ -147,7 +137,7 @@ impl<T: Component> Index<Entity> for ComponentMapper<Component=T> {
 
 struct MapperHandle {
     obj: TraitObject,
-    mapper: Box<Any> // used to ensure destructor is run.
+    _mapper: Box<Any> // used to ensure destructor is run.
 }
 
 impl MapperHandle {
@@ -158,7 +148,7 @@ impl MapperHandle {
             { mem::transmute(&mut *mapper as &mut ComponentMapper<Component=C>) };
         MapperHandle {
             obj: obj,
-            mapper: mapper as Box<Any>
+            _mapper: mapper as Box<Any>
         }
     }
 }
@@ -223,17 +213,6 @@ impl<'a> EntityQuery<'a> {
         self
     }
 
-    /// Causes this query to only return entities with a component of type `C`,
-    /// Filtered with the associated filter.
-    pub fn with_component_filtered<C, F>(mut self, filter: C::Filter) -> Self
-    where C: Filterable {
-        let mapper = self.mappers.get_mapper::<C>();
-        self.candidates.push(mapper.entities_filtered(&filter));
-        self.num_components += 1;
-
-        self
-    }
-
     /// Causes this query to only return entities without a component of type `C`.
     pub fn without_component<C>(mut self) -> Self
     where C: Component {
@@ -278,7 +257,6 @@ impl<'a> IntoIterator for EntityQuery<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::test::Bencher;
 
     const NEW_ENTITIES: usize = 1000;
 
@@ -309,6 +287,7 @@ mod tests {
             }
         }
     }
+
     unsafe impl ComponentEdit for Translate {
         type Item = Position;
 
@@ -329,16 +308,18 @@ mod tests {
         type Edit = Translate; // only translations are allowed.
     }
 
-    #[bench]
-    fn bench_general(b: &mut Bencher) {
-        // two part bench:
-        // each iteration adds 1000 new entities with a position
-        // and translates every existing position by (1,1)
+    #[test]
+    pub fn basic_test() {
         let mut world = WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
-            .with_system(PositionCreator)
             .with_system(PositionTranslator)
             .build();
-        b.iter(|| world.process_systems());
+
+        for e in world.entity_manager().next_entities(10001) {
+            world.get_mapper_mut::<Position>().set(e, Position{ x: 0, y: 0});
+        }
+
+        world.process_systems()
     }
+
 }

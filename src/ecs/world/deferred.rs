@@ -33,7 +33,7 @@ pub enum Message {
 
 /// Used to initialize entities created in a deferred manner with components.
 pub struct EntityCreationGuard {
-    entity_tx: Sender<Message>,
+    message_tx: Sender<Message>,
     initializer: Option<EntityInitializer>,
     n: usize,
 }
@@ -80,7 +80,7 @@ impl Drop for EntityCreationGuard {
     fn drop(&mut self) {
         if self.initializer.is_none() { return; }
         let initializer = self.initializer.take();
-        self.entity_tx.send(Message::Next(self.n, initializer.unwrap())).unwrap();
+        self.message_tx.send(Message::Next(self.n, initializer.unwrap())).unwrap();
     }
 }
 
@@ -170,7 +170,7 @@ where T: Editable {
 pub struct WorldHandle<'a> {
     em: &'a EntityManager,
     component_mappers: &'a ComponentMappers,
-    entity_tx: Sender<Message>
+    message_tx: Sender<Message>
 }
 
 impl<'a> WorldHandle<'a> {
@@ -181,7 +181,7 @@ impl<'a> WorldHandle<'a> {
 
     /// Destroy an entity.
     pub fn destroy_entity(&self, e: Entity) {
-        self.entity_tx.send(Message::Destroy(e)).unwrap();
+        self.message_tx.send(Message::Destroy(e)).unwrap();
     }
 
     /// Create an entity in a deferred manner.
@@ -192,7 +192,7 @@ impl<'a> WorldHandle<'a> {
     /// Create some entities in a deferred manner.
     pub fn next_entities(&self, n: usize) -> EntityCreationGuard {
         EntityCreationGuard {
-            entity_tx: self.entity_tx.clone(),
+            message_tx: self.message_tx.clone(),
             initializer: None,
             n: n
         }
@@ -200,7 +200,7 @@ impl<'a> WorldHandle<'a> {
 
     pub fn submit_change<T>(&self, e: Entity, edit: T::Edit)
     where T: Editable {
-        self.entity_tx.send(
+        self.message_tx.send(
             Message::Edit(
                 TypeId::of::<T>(),
                 e,
@@ -238,6 +238,6 @@ pub fn world_handle<'a>(em: &'a EntityManager,
     WorldHandle {
         em: em,
         component_mappers: cm,
-        entity_tx: tx,
+        message_tx: tx,
     }
 }

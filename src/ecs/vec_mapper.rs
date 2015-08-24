@@ -8,7 +8,7 @@
 //! be more efficient for storing Position data in many cases, particularly
 //! for collision detection.
 
-use super::{ComponentMapper, Component, Entity, Filterable};
+use super::{ComponentMapper, Component, Entity};
 use std::collections::HashMap;
 
 /// Default, generic, implementation of a component mapper.
@@ -73,13 +73,5 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
 
     fn entities(&self) -> Vec<Entity> {
         self.offsets.keys().cloned().collect()
-    }
-
-    fn entities_filtered(&self, filter: &T::Filter) -> Vec<Entity>
-    where T: Filterable {
-        // naive impl
-        self.entities().into_iter().filter(|e|
-            self.get(*e).unwrap().is_accepted_by(filter)
-        ).collect::<Vec<_>>()
     }
 }

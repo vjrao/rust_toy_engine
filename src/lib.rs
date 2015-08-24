@@ -1,4 +1,4 @@
-#![feature(raw, test, unboxed_closures)]
+#![feature(raw, unboxed_closures)]
 
 pub mod ecs;
 

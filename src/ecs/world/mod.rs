@@ -81,12 +81,12 @@ impl World {
         };
 
         // process systems
-        let (entity_tx, entity_rx) = channel();
+        let (message_tx, message_rx) = channel();
         {
             let handle = world_handle(
                 &self.entity_manager,
                 &self.component_mappers,
-                entity_tx,
+                message_tx,
             );
             for sys in &mut self.systems {
                 sys.process(&handle.clone());
@@ -95,7 +95,7 @@ impl World {
 
         let mut edit_holders: HashMap<TypeId, Box<EditHolder>> = HashMap::new();
         // process messages
-        for message in entity_rx {
+        for message in message_rx {
             match message {
                 Message::Next(n, init) => { 
                     let e_vec = self.entity_manager.next_entities(n);
@@ -116,6 +116,11 @@ impl World {
         for edit_holder in edit_holders.values() {
             edit_holder.apply(&mut self.component_mappers);
         }
+    }
+
+    /// Gets a mutable reference to the entity manager.
+    pub fn entity_manager(&mut self) -> &mut EntityManager {
+        &mut self.entity_manager
     }
 }
 

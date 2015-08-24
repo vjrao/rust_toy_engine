@@ -1,0 +1,1 @@
+General design thoughts for moving forward.

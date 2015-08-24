@@ -23,6 +23,8 @@ pub struct Entity {
 impl Entity {
     fn new(index: usize, gen: u8) -> Entity {
         Entity {
+            // if index > 2^INDEX_BITS, we're in trouble.
+            // TODO: add error handling.
             id: (gen as usize).wrapping_shl(INDEX_BITS as u32) + index
         }
     }

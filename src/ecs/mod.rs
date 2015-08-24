@@ -63,18 +63,12 @@ use std::ops::Index;
 use std::raw::TraitObject;
 
 pub use self::vec_mapper::VecMapper;
-pub use self::world::{EntityManager, World, WorldBuilder, WorldHandle};
+pub use self::world::{World, WorldBuilder, WorldHandle};
+pub use self::entity::{Entity, EntityManager};
 
 pub mod vec_mapper;
 pub mod world;
-
-/// An unique entity.
-/// Entities each have a unique id which serves
-/// as a weak pointer to the entity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Entity {
-    id: usize,
-}
+pub mod entity;
 
 /// A rust component type is any static type that can be cloned.
 pub trait Component: Any + Clone {}
@@ -332,14 +326,10 @@ mod tests {
     pub fn basic_test() {
         let mut world = WorldBuilder::new()
             .with_component_mapper(VecMapper::<Position>::new())
+            .with_system(PositionCreator)
             .with_system(PositionTranslator)
             .build();
 
-        for e in world.entity_manager().next_entities(10001) {
-            world.get_mapper_mut::<Position>().set(e, Position{ x: 0, y: 0});
-        }
-
-        world.process_systems()
+        for _ in 0..2 { world.process_systems() }
     }
-
 }

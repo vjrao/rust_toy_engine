@@ -1,7 +1,7 @@
 //! Provides `World` and `WorldBuilder` functionality.
 
 use std::any::{Any, TypeId};
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::mpsc::channel;
 
@@ -10,7 +10,7 @@ use super::{
     ComponentEdit,
     ComponentMapper,
     ComponentMappers,
-    Entity,
+    EntityManager,
     System,
 };
 
@@ -20,49 +20,6 @@ pub use self::deferred::{
 };
 
 mod deferred;
-
-/// Manages the creation and destruction of entities.
-pub struct EntityManager {
-    next: Entity,
-    entities: HashSet<Entity>,
-}
-
-impl EntityManager {
-    pub fn new() -> Self {
-        EntityManager {
-            next: Entity { id: 0 },
-            entities: HashSet::new()
-        }
-    }
-
-    /// Creates an entity.
-    pub fn next_entity(&mut self) -> Entity {
-        while self.is_alive(self.next) {
-            self.next.id += 1;
-        }
-        self.entities.insert(self.next);
-        self.next
-    }
-
-    /// Creates a vector of n entities.
-    pub fn next_entities(&mut self, n: usize) -> Vec<Entity> {
-        let mut entities = Vec::with_capacity(n);
-        for _ in 0..n {
-            entities.push(self.next_entity());
-        }
-        entities
-    }
-
-    /// Whether an entity is currently "alive", or exists.
-    pub fn is_alive(&self, e: Entity) -> bool {
-        self.entities.contains(&e)
-    }
-
-    /// Destroy an entity.
-    pub fn destroy_entity(&mut self, e: Entity) {
-        self.entities.remove(&e);
-    }
-}
 
 /// The `World` ties together entities, components, and systems.
 pub struct World {

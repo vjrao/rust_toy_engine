@@ -10,12 +10,9 @@ use ::ecs::{
     ComponentMappers,
     Editable,
     Entity,
+    EntityManager,
     EntityQuery,
     Prototype,
-};
-
-use super::{
-    EntityManager
 };
 
 type EntityInitializer = Box<Fn(&mut ComponentMappers, Entity)>;

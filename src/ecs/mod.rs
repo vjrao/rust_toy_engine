@@ -9,18 +9,38 @@
 //! ```
 //! use engine::ecs::*;
 //!
-//! #[derive(Eq, PartialEq, Debug)]
-//! struct Counter(pub u32);
+//! #[derive(Eq, PartialEq, Debug, Clone)]
+//! struct Counter(pub usize);
+//!
+//! struct Increment(usize);
+//!
+//! impl Increment {
+//!     fn new() -> Increment { Increment(1) }
+//! }
+//!
+//! unsafe impl ComponentEdit for Increment {
+//!    type Item = Counter;
+//!    fn is_commutative(&self) -> bool { true }
+//!    fn combine_with(self, other: Increment) -> Increment {
+//!        Increment(self.0 + other.0)
+//!    }
+//!
+//!    fn apply(&self, counter: &mut Counter) { 
+//!        counter.0 += self.0;
+//!    }
+//! }
+//!
+//! impl Editable for Counter {
+//!     type Edit = Increment;
+//! }
+//!
 //! struct CounterSystem;
 //! impl System for CounterSystem {
-//!     fn process(&mut self, mappers: &ComponentMappers, em: &EntityManager) {
-//!         let entities: Vec<Entity> = 
-//!             mappers.query()
-//!             .with_component::<Counter>()
-//!             .into_iter().collect();
-//!         let count_mapper = mappers.get_mapper_mut::<Counter>().unwrap();
-//!         for e in entities {
-//!            count_mapper.get_mut(*e).unwrap().0 += 1;
+//!     fn process(&mut self, handle: &WorldHandle) {
+//!         for e in 
+//!             handle.query()
+//!             .with_component::<Counter>() {
+//!             handle.submit_change::<Counter>(e, Increment::new())
 //!         }
 //!     }
 //! }
@@ -30,10 +50,10 @@
 //!     .with_component_mapper(VecMapper::<Counter>::new())
 //!     .with_system(CounterSystem)
 //!     .build();
-//! let e = world.next_entity();
-//! world.get_mapper_mut::<Counter>().unwrap().set(e, Counter(0));
+//! let e = world.entity_manager().next_entity();
+//! world.get_mapper_mut::<Counter>().set(e, Counter(0));
 //! world.process_systems();
-//! let new_count = world.get_mapper::<Counter>()[e].unwrap();
+//! let new_count = world.get_mapper::<Counter>().get(e).unwrap();
 //! assert_eq!(*new_count, Counter(1));
 //! ```
 use std::any::{Any, TypeId};

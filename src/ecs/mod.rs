@@ -40,7 +40,7 @@
 //!         for e in 
 //!             handle.query()
 //!             .with_component::<Counter>() {
-//!             handle.submit_change::<Counter>(e, Increment::new())
+//!             handle.submit_change(e, Increment::new())
 //!         }
 //!     }
 //! }
@@ -286,7 +286,7 @@ mod tests {
     impl System for PositionTranslator {
         fn process(&mut self, handle: &WorldHandle) {
             for e in handle.query().with_component::<Position>() {
-                handle.submit_change::<Position>(e, Translate { x: 1, y: 1 });
+                handle.submit_change(e, Translate { x: 1, y: 1 });
             }
         }
     }

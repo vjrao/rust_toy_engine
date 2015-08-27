@@ -196,8 +196,8 @@ impl<'a> WorldHandle<'a> {
         }
     }
 
-    pub fn submit_change<T>(&self, e: Entity, edit: T::Edit)
-    where T: Editable {
+    pub fn submit_change<E, T>(&self, e: Entity, edit: E)
+    where E: ComponentEdit<Item=T> + Any, T: Editable {
         self.message_tx.send(
             Message::Edit(
                 TypeId::of::<T>(),

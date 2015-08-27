@@ -57,7 +57,7 @@ impl EntityCreationGuard {
     }
 
     /// When the entity is created, initialize it with this prototype.
-    pub fn prototype<C: Component, P: Prototype + 'static>(self, p: P) -> Self {
+    pub fn prototype<P: Prototype + 'static>(self, p: P) -> Self {
         let mut s = self;
         if let Some(init) = s.initializer.take() {
             s.initializer = Some(Box::new(move |mappers, e| {

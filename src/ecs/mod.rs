@@ -177,8 +177,8 @@ impl ComponentMappers {
     }
 
     /// Get an immutable reference to the component mapper for this type.
-    pub fn get_mapper<T: Component>(&self)
-                                -> &ComponentMapper<Component=T> {
+    pub fn get_mapper< 'b, 'a: 'b, T: Component>(&'a self)
+                                -> &'b ComponentMapper<Component=T> {
         let mapper: Option<&Box<ComponentMapper<Component=T>>>
         = self.0.get(&TypeId::of::<T>()).and_then(|h|
             h.mapper.downcast_ref::<Box<ComponentMapper<Component=T>>>()
@@ -188,8 +188,8 @@ impl ComponentMappers {
     }
 
     /// Get a mutable reference to the component mapper for this type.
-    pub fn get_mapper_mut<T: Component>(&mut self)
-                                -> &mut ComponentMapper<Component=T> {
+    pub fn get_mapper_mut<'b, 'a: 'b, T: Component>(&'a mut self)
+                                -> &'b mut ComponentMapper<Component=T> {
         let mapper: Option<&mut Box<ComponentMapper<Component=T>>>
         = self.0.get_mut(&TypeId::of::<T>()).and_then(|h|
             h.mapper.downcast_mut::<Box<ComponentMapper<Component=T>>>()

@@ -244,7 +244,6 @@ impl<'a> IntoIterator for EntityQuery<'a> {
 
     fn into_iter(self) -> Self::IntoIter {
         let mut map = HashMap::new();
-        let mut entities = Vec::new();
 
         // find the intersection between all the candidate lists
         for e in self.candidates.iter().flat_map(|v| v.iter()) {
@@ -258,13 +257,10 @@ impl<'a> IntoIterator for EntityQuery<'a> {
         }
 
         // collect all entities in the intersection
-        for (e, i) in map {
-            if i == self.num_components && self.em.is_alive(*e) {
-                entities.push(*e)
-            }
-        }
-
-        entities.into_iter()
+        map.into_iter().filter_map(|(k, v)| {
+            if v == self.candidates.len() && self.em.is_alive(*k) { Some(*k) }
+            else { None }
+        }).collect::<Vec<_>>().into_iter()
     }
 }
 

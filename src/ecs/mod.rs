@@ -58,9 +58,7 @@
 //! ```
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::mem;
 use std::ops::Index;
-use std::raw::TraitObject;
 
 pub use self::vec_mapper::VecMapper;
 pub use self::world::{World, WorldBuilder, WorldHandle};
@@ -150,19 +148,16 @@ impl<T: Component> Index<Entity> for ComponentMapper<Component=T> {
 }
 
 struct MapperHandle {
-    obj: TraitObject,
-    _mapper: Box<Any> // used to ensure destructor is run.
+    mapper: Box<Any> // Box<Box<ComponentMapper<Component=C>>
 }
 
 impl MapperHandle {
+    // create a Box<Any> that aliases a Box<Box<ComponentMapper<Component=C>>
     fn from_mapper<C, M: Any>(mapper: M) -> Self 
     where C: Component, M: ComponentMapper<Component=C> + 'static {
-        let mut mapper = Box::new(mapper);
-        let obj: TraitObject = unsafe 
-            { mem::transmute(&mut *mapper as &mut ComponentMapper<Component=C>) };
+        let mapper = Box::new(mapper) as Box<ComponentMapper<Component=C>>;
         MapperHandle {
-            obj: obj,
-            _mapper: mapper as Box<Any>
+            mapper: Box::new(mapper) as Box<Any>
         }
     }
 }
@@ -184,25 +179,23 @@ impl ComponentMappers {
     /// Get an immutable reference to the component mapper for this type.
     pub fn get_mapper<T: Component>(&self)
                                 -> &ComponentMapper<Component=T> {
-        let mapper: Option<&ComponentMapper<Component=T>>
-        = self.0.get(&TypeId::of::<T>()).map(|h|
-            unsafe { 
-                mem::transmute_copy(&h.obj) 
-            }
+        let mapper: Option<&Box<ComponentMapper<Component=T>>>
+        = self.0.get(&TypeId::of::<T>()).and_then(|h|
+            h.mapper.downcast_ref::<Box<ComponentMapper<Component=T>>>()
         );
         debug_assert!(mapper.is_some());
-        mapper.unwrap()
+        &**mapper.unwrap()
     }
 
     /// Get a mutable reference to the component mapper for this type.
     pub fn get_mapper_mut<T: Component>(&mut self)
                                 -> &mut ComponentMapper<Component=T> {
-        let mapper: Option<&mut ComponentMapper<Component=T>>
-        = self.0.get_mut(&TypeId::of::<T>()).map(|h|
-            unsafe {mem::transmute_copy(&h.obj) }
+        let mapper: Option<&mut Box<ComponentMapper<Component=T>>>
+        = self.0.get_mut(&TypeId::of::<T>()).and_then(|h|
+            h.mapper.downcast_mut::<Box<ComponentMapper<Component=T>>>()
         );
         debug_assert!(mapper.is_some());
-        mapper.unwrap()
+        &mut **mapper.unwrap()
     }
 }
 

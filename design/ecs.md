@@ -1,3 +1,5 @@
+Queries are the biggest performance killer right now.
+
 Build a database of entities and component data as byte arrays
 ==============================================================
 implementation 1: 
@@ -23,8 +25,13 @@ NOTES:
 
 implementation 2:
 -----------------
-each column has its own search tree of entities holding an (offset, len) pair.
-each column also has its own data array.
+each column has its own search tree of entities holding an offset.
+
+search tree vs. HashMap: tree is ordered but only by one heuristic.
+tree lookup is far slower. finding the union with a hashmap is proving to be a serious performance bottleneck. 
+
+each column also has its own data array. should replace ComponentMapper.replace entities() with something like component_data() -> Vec<(Entity, &Component)>
+to more easily build the search tree.
     
 data layout: [e1.pos, e2.pos, e3.pos, ...], [e1.vel, e2.vel, e3.vel, ...]
 
@@ -49,8 +56,8 @@ a query run now goes like this:
 
   this will cache common queries. should we cache the entire query, or just parts? 
 
-  if we cache entire queries, we eliminate needing to find overlaps multiple times, but this only helps if the same query is run multiple times, which doesn't seem excessively common. if we just cache parts of the query, we still need to find overlap between all parts, but multiple queries which use similar parts will all benefit. we could even start by pre-processing zero columns of the database before each update, and then applying all that are used often enough. No point in caching all entities if they aren't used often.
+  if we cache entire queries, we eliminate needing to find overlaps multiple times, but this only helps if the same query is run multiple times, which doesn't seem excessively common. if we just cache parts of the query, we still need to find overlap between all parts, but multiple queries which use similar parts will all benefit. additionally, finding overlap costs almost nothing. we could even start by pre-processing zero columns of the database before each update, and then applying all that are used often enough. No point in caching all entities if they aren't used often.
 
 Batching edits:
 ===============
-  seems hard to do generically, but we can provide an interface for users to apply the same edit to many entities. one of the most expensive parts of sending edits is the act of actually sending it over the channel, which involves expensive memory allocations. there should be a way to apply *similar* edits to multiple entities, e.g. apply a translate of (entity.velocity.x, entity.velocity.y) to entity.position for every entity with both.This will reduce the number of messages sent over the channel to 1 from len(entities), which should yield a large performance improvement.
+  seems hard to do generically, but we can provide an interface for users to apply the same edit to many entities. one of the most expensive parts of sending edits is the act of actually sending it over the channel, which involves expensive memory allocations. there should be a way to apply *similar* edits to multiple entities, e.g. apply a translate of (entity.velocity.x, entity.velocity.y) to entity.position for every entity with both.This will reduce the number of messages sent over the channel to 1 from len(entities), which should yield a large performance improvement. Unfortunately the API for something like that is fairly messy (see submit_changes)

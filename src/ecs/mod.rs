@@ -61,7 +61,7 @@ use std::collections::HashMap;
 use std::ops::Index;
 
 pub use self::vec_mapper::VecMapper;
-pub use self::world::{World, WorldBuilder, WorldHandle};
+pub use self::world::{EntityQuery, World, WorldBuilder, WorldHandle};
 pub use self::entity::{Entity, EntityManager};
 
 pub mod vec_mapper;
@@ -196,66 +196,6 @@ impl ComponentMappers {
         );
         debug_assert!(mapper.is_some());
         &mut **mapper.unwrap()
-    }
-}
-
-/// A builder for entity queries.
-pub struct EntityQuery<'a> {
-    mappers: &'a ComponentMappers,
-    em: &'a EntityManager,
-    num_components: usize,
-    candidates: Vec<Vec<Entity>>,
-    disallowed: Vec<Vec<Entity>>,
-}
-
-impl<'a> EntityQuery<'a> {
-    /// Causes this query to only return entities with a component of type `C`.
-    pub fn with_component<C>(mut self) -> Self
-    where C: Component {
-        let mapper = self.mappers.get_mapper::<C>();
-
-        self.candidates.push(mapper.entities());
-        self.num_components += 1;
-
-        self
-    }
-
-    /// Causes this query to only return entities without a component of type `C`.
-    pub fn without_component<C>(mut self) -> Self
-    where C: Component {
-        let mapper = self.mappers.get_mapper::<C>();
-        self.disallowed.push(mapper.entities());
-        self
-    }
-}
-
-/// The implementation of IntoIterator for EntityQuery executes
-/// the query on the mappers.
-impl<'a> IntoIterator for EntityQuery<'a> {
-    type Item = Entity;
-    type IntoIter = <Vec<Entity> as IntoIterator>::IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        let mut map = HashMap::new();
-
-        // find the intersection between all the candidate lists
-        for e in self.candidates.iter().flat_map(|v| v.iter())
-        .filter(|e| self.em.is_alive(**e)) {
-            let i = map.entry(e).or_insert(0usize);
-            *i += 1;
-        }
-
-        // but ensure that no disallowed entities will be included.
-        for e in self.disallowed.iter().flat_map(|v| v.iter())
-        .filter(|e| self.em.is_alive(**e)) {
-            map.insert(e, 0);
-        }
-
-        // collect all entities in the intersection
-        map.into_iter().filter_map(|(k, v)| {
-            if v == self.candidates.len(){ Some(*k) }
-            else { None }
-        }).collect::<Vec<_>>().into_iter()
     }
 }
 

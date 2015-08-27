@@ -1,7 +1,7 @@
 //! Provides `World` and `WorldBuilder` functionality.
 
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::mpsc::channel;
 
@@ -16,6 +16,7 @@ use super::{
 
 pub use self::deferred::{
     EntityCreationGuard,
+    EntityQuery,
     WorldHandle,
 };
 
@@ -51,6 +52,7 @@ impl World {
         }
 
         let mut edit_holders: HashMap<TypeId, Box<EditHolder>> = HashMap::new();
+        let mut pruned = HashSet::new();
         // process messages
         for message in message_rx {
             match message {
@@ -60,12 +62,18 @@ impl World {
                         init(&mut self.component_mappers, e);
                     }
                 }
-                Message::Edit(id, entity, edit, init) => {
+                Message::Edit(id, edits, init) => {
                     let edit_holder = edit_holders.entry(id).or_insert(init());
-                    edit_holder.push(entity, edit);
+                    edit_holder.push(edits);
                 }
                 Message::Destroy(e) => {
                     self.entity_manager.destroy_entity(e);
+                }
+                Message::Prune(id, prune) => {
+                    if !pruned.contains(&id) {
+                        prune(&mut self.component_mappers, &self.entity_manager);
+                        pruned.insert(id);
+                    }
                 }
             }
         }

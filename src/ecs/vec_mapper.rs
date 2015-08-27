@@ -9,7 +9,7 @@
 //! for collision detection.
 
 use super::{ComponentMapper, Component, Entity};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Default, generic, implementation of a component mapper.
 /// It is backed by a vector and designed to be cache-friendly.
@@ -17,7 +17,7 @@ use std::collections::HashMap;
 pub struct VecMapper<T> {
     instance_data: Vec<T>,
     offsets: HashMap<Entity, usize>,
-    unused_slots: Vec<usize>,
+    unused_slots: VecDeque<usize>,
 }
 
 impl<T> VecMapper<T> {
@@ -26,7 +26,7 @@ impl<T> VecMapper<T> {
         VecMapper {
             instance_data: Vec::new(),
             offsets: HashMap::new(),
-            unused_slots: Vec::new(),
+            unused_slots: VecDeque::new(),
         }
     }
 }
@@ -42,7 +42,7 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
 
             _ => {}
         }
-        if let Some(idx) = self.unused_slots.pop() {
+        if let Some(idx) = self.unused_slots.pop_front() {
             self.offsets.insert(e, idx);
             self.instance_data[idx] = c;
         } else {
@@ -67,7 +67,7 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
 
     fn remove(&mut self, e: Entity) {
         if let Some(idx) = self.offsets.remove(&e) {
-            self.unused_slots.push(idx);
+            self.unused_slots.push_back(idx);
         }
     }
 

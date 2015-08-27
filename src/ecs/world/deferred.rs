@@ -85,7 +85,7 @@ impl Drop for EntityCreationGuard {
 // the channels for deferred processing.
 pub trait EditHolder {
     fn push(&mut self, Entity, Box<Any>);
-    fn apply(&self, &mut ComponentMappers);
+    fn apply(&self, &mut ComponentMappers, &EntityManager);
 }
 
 // utility struct for holding component edits
@@ -108,9 +108,10 @@ impl<T: Editable> EditHolder for TypedEditHolder<T> {
         entry.push(*edit);
     }
 
-    fn apply(&self, mappers: &mut ComponentMappers) {
+    fn apply(&self, mappers: &mut ComponentMappers, em: &EntityManager) {
         let mapper = mappers.get_mapper_mut::<T>();
         for (entity, edits) in &self.map {
+            if !em.is_alive(*entity) { continue }
             let cdata = mapper.get_mut(*entity);
             if cdata.is_none() { continue };
             let cdata = cdata.unwrap();

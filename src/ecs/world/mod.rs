@@ -71,7 +71,7 @@ impl World {
         }
 
         for edit_holder in edit_holders.values() {
-            edit_holder.apply(&mut self.component_mappers);
+            edit_holder.apply(&mut self.component_mappers, &self.entity_manager);
         }
     }
 

@@ -239,19 +239,21 @@ impl<'a> IntoIterator for EntityQuery<'a> {
         let mut map = HashMap::new();
 
         // find the intersection between all the candidate lists
-        for e in self.candidates.iter().flat_map(|v| v.iter()) {
+        for e in self.candidates.iter().flat_map(|v| v.iter())
+        .filter(|e| self.em.is_alive(**e)) {
             let i = map.entry(e).or_insert(0usize);
             *i += 1;
         }
 
         // but ensure that no disallowed entities will be included.
-        for e in self.disallowed.iter().flat_map(|v| v.iter()) {
+        for e in self.disallowed.iter().flat_map(|v| v.iter())
+        .filter(|e| self.em.is_alive(**e)) {
             map.insert(e, 0);
         }
 
         // collect all entities in the intersection
         map.into_iter().filter_map(|(k, v)| {
-            if v == self.candidates.len() && self.em.is_alive(*k) { Some(*k) }
+            if v == self.candidates.len(){ Some(*k) }
             else { None }
         }).collect::<Vec<_>>().into_iter()
     }

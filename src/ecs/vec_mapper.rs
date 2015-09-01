@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 /// It is backed by a vector and designed to be cache-friendly.
 /// This should be sufficient for most component types.
 pub struct VecMapper<T> {
-    instance_data: Vec<T>,
+    instance_data: Vec<(Entity, T)>,
     offsets: HashMap<Entity, usize>,
     unused_slots: VecDeque<usize>,
 }
@@ -36,7 +36,7 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
     fn set(&mut self, e: Entity, c: T) {
         match self.offsets.get(&e) {
             Some(idx) => {
-                self.instance_data[*idx] = c;
+                self.instance_data[*idx].1 = c;
                 return;
             }
 
@@ -44,23 +44,23 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
         }
         if let Some(idx) = self.unused_slots.pop_front() {
             self.offsets.insert(e, idx);
-            self.instance_data[idx] = c;
+            self.instance_data[idx] = (e, c);
         } else {
-            self.instance_data.push(c);
+            self.instance_data.push((e, c));
             self.offsets.insert(e, self.instance_data.len() - 1);
         }
     }
 
     fn get(&self, e: Entity) -> Option<&T> {
         match self.offsets.get(&e) {
-            Some(idx) => Some(&self.instance_data[*idx]),
+            Some(idx) => Some(&self.instance_data[*idx].1),
             None => None
         }
     }
 
     fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
         match self.offsets.get(&e) {
-            Some(idx) => Some(&mut self.instance_data[*idx]),
+            Some(idx) => Some(&mut self.instance_data[*idx].1),
             None => None
         }
     }
@@ -72,6 +72,6 @@ impl<T: Component> ComponentMapper for VecMapper<T> {
     }
 
     fn entities(&self) -> Vec<Entity> {
-        self.offsets.keys().cloned().collect()
+        self.instance_data.iter().map(|p| p.0).collect()
     }
 }

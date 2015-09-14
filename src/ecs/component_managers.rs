@@ -5,7 +5,11 @@ use std::mem;
 use super::{Component, ComponentManager};
 
 /// Something that can look up managers.
-pub trait ManagerLookup {
+///
+/// In practice, this is almost always going to be a `ComponentManagers`,
+/// but this trait exists as a way to to facilitate recursive generic type
+/// declarations.
+pub trait ManagerLookup: Clone {
     /// Returns a unique depth of this component type or `None`.
     /// While this seems relatively useless at first glance,
     /// it can be used to give each component a unique id in the world.
@@ -43,6 +47,7 @@ impl ManagerLookup for () {
 }
 
 /// A conglomeration of component managers. Very fast to query.
+#[derive(Clone)]
 pub struct ComponentManagers<L, M, C> {
     nested: L,
     top_level: M,
@@ -50,14 +55,14 @@ pub struct ComponentManagers<L, M, C> {
 }
 
 impl<L, M, C> ComponentManagers<L, M, C>
-where L: ManagerLookup, M: ComponentManager<C>, C: Component {
-    fn new(manager: M) -> ComponentManagers<(), M, C> {
+where L: ManagerLookup, M: ComponentManager<C> + Clone, C: Component {
+    pub fn new(manager: M) -> ComponentManagers<(), M, C> {
         ().and(manager)
     }
 }
 
 impl<L, M, C> ManagerLookup for ComponentManagers<L, M, C>
-where L: ManagerLookup, M: ComponentManager<C>, C: Component {
+where L: ManagerLookup, M: ComponentManager<C> + Clone, C: Component {
     fn depth_of<T: Component>(&self) -> Result<usize, usize> {
         match self.nested.depth_of::<T>() {
             Ok(depth) => Ok(depth),

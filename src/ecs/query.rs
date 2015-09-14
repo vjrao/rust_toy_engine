@@ -1,3 +1,14 @@
+use std::any::TypeId;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+
+use super::{
+    Component,
+    ComponentManager,
+    Entity,
+    EntityManager,
+};
+use super::component_managers::ManagerLookup;
 
 // different ways of storing indices of entities
 // maps are used if there are few entities in this array.
@@ -6,8 +17,12 @@ enum IndexMode {
     Map(HashMap<Entity, usize>),
 }
 
+/// A QuerySpec that has been specialized to include a specific component.
+#[derive(Clone)]
+pub struct SpecializedQuerySpec<Q: QuerySpec, T: Component>(Q, PhantomData<T>);
+
 /// A representation of a query in data.
-trait QuerySpec: Clone {
+pub trait QuerySpec: Clone {
     /// The type produced when component data is loaded for an entity.
     type Entry;
 
@@ -27,9 +42,9 @@ trait QuerySpec: Clone {
     fn depths<M: ManagerLookup>(&self, &M) -> Vec<usize> where Self: Sized; 
 
     /// Adds a component to this query spec
-    fn with_component<T: Component>(self) -> Result<(Self, PhantomData<T>), Self> where Self: Sized {
+    fn with_component<T: Component>(self) -> Result<SpecializedQuerySpec<Self, T>, Self> where Self: Sized {
         if self.has::<T>() { Err(self) }
-        else { Ok((self, PhantomData)) }
+        else { Ok(SpecializedQuerySpec(self, PhantomData)) }
     }
 }
 
@@ -39,7 +54,7 @@ trait QuerySpec: Clone {
 impl QuerySpec for () {
     type Entry = ();
     fn has<T: Component>(&self) -> bool { false }
-    fn load<M: ManagerLookup>(&self, managers: &M, e: Entity) -> Option<()> { Some(()) }
+    fn load<M: ManagerLookup>(&self, _m: &M, _e: Entity) -> Option<()> { Some(()) }
     fn num_components(&self) -> usize { 0 }
     fn entity_appearances<M: ManagerLookup>(&self, _m: &M) -> HashMap<Entity, usize> {
         HashMap::<Entity, usize>::new()
@@ -50,7 +65,7 @@ impl QuerySpec for () {
 }
 
 // QuerySpecs are largely implemented as "Nested" 0-sized tuples.
-impl<Q: QuerySpec, C: Component> QuerySpec for (Q, PhantomData<C>) {
+impl<Q: QuerySpec, C: Component> QuerySpec for SpecializedQuerySpec<Q, C> {
     /// shouldn't really clone the data whenever it's queried, if it doesn't need to be.
     type Entry = (Q::Entry, C);
 
@@ -83,6 +98,45 @@ impl<Q: QuerySpec, C: Component> QuerySpec for (Q, PhantomData<C>) {
         let mut v = self.0.depths(managers);
         v.push(managers.depth_of::<C>().ok().expect("no manager found for component"));
         v
+    }
+}
+
+impl<Q: QuerySpec, C: Component> QuerySpec for Result<SpecializedQuerySpec<Q, C>, Q> {
+    type Entry = Result<(Q::Entry, C), Q::Entry>;
+
+    fn has<T: Component>(&self) -> bool {
+        match self {
+            &Ok(ref q) => q.has::<T>(),
+            &Err(ref q) => q.has::<T>(),
+        }
+    }
+
+    fn load<M: ManagerLookup>(&self, managers: &M, e: Entity) -> Option<Self::Entry> {
+        match self {
+            &Ok(ref q) => q.load(managers, e).map(|v| Ok(v)),
+            &Err(ref q) => q.load(managers, e).map(|v| Err(v)),
+        }
+    }
+
+    fn num_components(&self) -> usize { 
+        match self {
+            &Ok(ref q) => q.num_components(),
+            &Err(ref q) => q.num_components(),
+        }
+    }
+
+    fn entity_appearances<M: ManagerLookup>(&self, managers: &M) -> HashMap<Entity, usize> {
+        match self {
+            &Ok(ref q) => q.entity_appearances(managers),
+            &Err(ref q) => q.entity_appearances(managers),
+        }
+    }
+
+    fn depths<M: ManagerLookup>(&self, managers: &M) -> Vec<usize> {
+        match self {
+            &Ok(ref q) => q.depths(managers),
+            &Err(ref q) => q.depths(managers),
+        }
     }
 }
 
@@ -126,12 +180,15 @@ impl<'a, Q: QuerySpec, M: 'a + ManagerLookup> Iterator for ColdQuery<'a, Q, M> {
 }
 
 impl<'a, Q: QuerySpec, M: 'a + ManagerLookup> ColdQuery<'a, Q, M> {
-    fn new(spec: Q, managers: &'a M) -> Self {
+    pub fn new(spec: Q, managers: &'a M, entity_manager: &EntityManager) -> Self {
         let num_components = spec.num_components();
         let entities = spec.entity_appearances(managers).iter()
         .filter_map(|(e, v)| {
-            if *v == num_components { Some(*e) }
-            else { None }
+            if entity_manager.is_alive(*e) && *v == num_components { 
+                Some(*e)
+            } else { 
+                None
+            }
         }).collect::<Vec<_>>();
         ColdQuery {
             spec: spec,

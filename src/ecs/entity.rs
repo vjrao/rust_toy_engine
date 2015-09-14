@@ -11,7 +11,7 @@ const INDEX_BITS: usize = (32 - GEN_BITS);
 const INDEX_BITS: usize = (64 - GEN_BITS);
 const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
 
-// The default value for min_unused
+// The default value for min_unused. 
 const DEFAULT_MIN_UNUSED: usize = 1024;
 
 /// An unique entity.
@@ -50,8 +50,8 @@ pub struct EntityManager {
 
 impl EntityManager {
     /// Create a new entity manager.
-    fn new() -> Self {
-        let min_unused = 1024;
+    pub fn new() -> Self {
+        let min_unused = DEFAULT_MIN_UNUSED;
         EntityManager {
             generation: Vec::new(),
             unused: VecDeque::with_capacity(min_unused + 1),

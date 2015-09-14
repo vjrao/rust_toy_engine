@@ -14,6 +14,7 @@ use std::collections::{HashMap, VecDeque};
 /// Default, generic, implementation of a component Manager.
 /// It is backed by a vector and designed to be cache-friendly.
 /// This should be sufficient for most component types.
+#[derive(Clone)]
 pub struct VecManager<T> {
     instance_data: Vec<(Entity, T)>,
     offsets: HashMap<Entity, usize>,
@@ -31,8 +32,7 @@ impl<T> VecManager<T> {
     }
 }
 
-impl<T: Component> ComponentManager for VecManager<T> {
-    type Component = T;
+impl<T: Component> ComponentManager<T> for VecManager<T> {
     fn set(&mut self, e: Entity, c: T) {
         match self.offsets.get(&e) {
             Some(idx) => {
@@ -58,20 +58,16 @@ impl<T: Component> ComponentManager for VecManager<T> {
         }
     }
 
-    fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
-        match self.offsets.get(&e) {
-            Some(idx) => Some(&mut self.instance_data[*idx].1),
-            None => None
-        }
-    }
-
-    fn remove(&mut self, e: Entity) {
+    fn remove(&mut self, e: Entity) -> Option<T> {
         if let Some(idx) = self.offsets.remove(&e) {
             self.unused_slots.push_back(idx);
+            Some(self.instance_data[idx].1.clone())
+        } else {
+            None
         }
     }
 
-    fn entities(&self) -> Vec<Entity> {
-        self.instance_data.iter().map(|p| p.0).collect()
+    fn component_data(&self) -> Vec<(Entity, &T)> {
+        self.instance_data.iter().map(|&(e, ref t)| (e, t)).collect()
     }
 }

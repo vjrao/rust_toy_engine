@@ -4,13 +4,15 @@ use std::collections::VecDeque;
 const GEN_BITS: usize = 8;
 const GEN_MASK: usize = (1 << GEN_BITS) - 1;
 // The number of bits in the id to use for the index.
+// use usize::BITS when it becomes stable.
 #[cfg(target_pointer_width = "32")]
 const INDEX_BITS: usize = (32 - GEN_BITS);
 #[cfg(target_pointer_width = "64")]
 const INDEX_BITS: usize = (64 - GEN_BITS);
 const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
-// The minimum number of unused indices that need to exist before one is used.
-const MIN_UNUSED: usize = 1024;
+
+// The default value for min_unused
+const DEFAULT_MIN_UNUSED: usize = 1024;
 
 /// An unique entity.
 /// Entities each have a unique id which serves
@@ -22,10 +24,12 @@ pub struct Entity {
 
 impl Entity {
     fn new(index: usize, gen: u8) -> Entity {
+        // if index > 2^INDEX_BITS, we're in trouble.
+        // TODO: add error handling.
+        assert!(index < (1 << INDEX_BITS));
+        let id = (gen as usize).wrapping_shl(INDEX_BITS as u32) + index;
         Entity {
-            // if index > 2^INDEX_BITS, we're in trouble.
-            // TODO: add error handling.
-            id: (gen as usize).wrapping_shl(INDEX_BITS as u32) + index
+            id: id
         }
     }
 
@@ -41,19 +45,23 @@ impl Entity {
 pub struct EntityManager {
     generation: Vec<u8>,
     unused: VecDeque<usize>,
+    min_unused: usize,
 }
 
 impl EntityManager {
-    pub fn new() -> Self {
+    /// Create a new entity manager.
+    fn new() -> Self {
+        let min_unused = 1024;
         EntityManager {
             generation: Vec::new(),
-            unused: VecDeque::with_capacity(MIN_UNUSED + 1)
+            unused: VecDeque::with_capacity(min_unused + 1),
+            min_unused: min_unused,
         }
     }
 
     /// Creates an entity.
     pub fn next_entity(&mut self) -> Entity {
-        if self.unused.len() <= MIN_UNUSED {
+        if self.unused.len() <= self.min_unused {
             self.generation.push(0);
             let idx = self.generation.len() - 1;
             Entity::new(idx, 0)
@@ -81,5 +89,10 @@ impl EntityManager {
     /// Destroy an entity.
     pub fn destroy_entity(&mut self, e: Entity) {
         self.generation[e.index()] += 1;
+    }
+
+    /// Get a rough idea of how many entities are alive right now. Only overestimates.
+    pub fn size_hint(&self) -> usize {
+        self.generation.len()
     }
 }

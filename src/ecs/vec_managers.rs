@@ -1,29 +1,29 @@
-//! A default and generic implementation of ComponentMapper.
+//! A default and generic implementation of ComponentManager.
 //!
 //! This stores all component data in a vector, where
 //! offsets into the vector are stored in a hashmap.
 //! Users of the library may find it is more efficient
-//! to write custom ComponentMapper types.
+//! to write custom ComponentManager types.
 //! For example, some kind of spatial partitioning system would likely
 //! be more efficient for storing Position data in many cases, particularly
 //! for collision detection.
 
-use super::{ComponentMapper, Component, Entity};
+use super::{ComponentManager, Component, Entity};
 use std::collections::{HashMap, VecDeque};
 
-/// Default, generic, implementation of a component mapper.
+/// Default, generic, implementation of a component Manager.
 /// It is backed by a vector and designed to be cache-friendly.
 /// This should be sufficient for most component types.
-pub struct VecMapper<T> {
+pub struct VecManager<T> {
     instance_data: Vec<(Entity, T)>,
     offsets: HashMap<Entity, usize>,
     unused_slots: VecDeque<usize>,
 }
 
-impl<T> VecMapper<T> {
-    ///Creates a new VecMapper
-    pub fn new() -> VecMapper<T> {
-        VecMapper {
+impl<T> VecManager<T> {
+    ///Creates a new VecManager
+    pub fn new() -> VecManager<T> {
+        VecManager {
             instance_data: Vec::new(),
             offsets: HashMap::new(),
             unused_slots: VecDeque::new(),
@@ -31,7 +31,7 @@ impl<T> VecMapper<T> {
     }
 }
 
-impl<T: Component> ComponentMapper for VecMapper<T> {
+impl<T: Component> ComponentManager for VecManager<T> {
     type Component = T;
     fn set(&mut self, e: Entity, c: T) {
         match self.offsets.get(&e) {

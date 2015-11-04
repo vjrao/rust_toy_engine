@@ -52,7 +52,13 @@ pub struct EntityManager {
 impl EntityManager {
     /// Create a new entity manager.
     pub fn new() -> Self {
-        let min_unused = DEFAULT_MIN_UNUSED;
+        EntityManager::with_min_unused(DEFAULT_MIN_UNUSED)
+    }
+
+    /// Creates a new entity manager which forces
+    /// there to be `min_unused` dead entities before
+    /// any are recycled.
+    pub fn with_min_unused(min_unused: usize) -> Self {
         EntityManager {
             generation: Vec::new(),
             unused: VecDeque::with_capacity(min_unused + 1),

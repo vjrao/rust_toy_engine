@@ -42,6 +42,7 @@ impl Entity {
     }
 }
 /// Manages the creation and destruction of entities.
+#[derive(Clone)]
 pub struct EntityManager {
     generation: Vec<u8>,
     unused: VecDeque<usize>,
@@ -67,18 +68,20 @@ impl EntityManager {
             Entity::new(idx, 0)
         } else {
             let idx = self.unused.pop_front().unwrap();
-            self.generation[idx] += 1;
             Entity::new(idx, self.generation[idx])
         }
     }
 
-    /// Creates a vector of n entities.
-    pub fn next_entities(&mut self, n: usize) -> Vec<Entity> {
-        let mut entities = Vec::with_capacity(n);
-        for _ in 0..n {
-            entities.push(self.next_entity());
+    /// Creates n entities and puts them into the slice given.
+    /// If the slice is smaller than n, it only creates enough entities to fill the slice.
+    ///
+    /// Returns the number of entities created.
+    pub fn next_entities(&mut self, buf: &mut [Entity], n: usize) -> usize {
+        let num = min(n, buf.len());
+        for i in 0..num {
+            buf[i] = self.next_entity();
         }
-        entities
+        num
     }
 
     /// Whether an entity is currently "alive", or exists.
@@ -89,6 +92,7 @@ impl EntityManager {
     /// Destroy an entity.
     pub fn destroy_entity(&mut self, e: Entity) {
         self.generation[e.index()] += 1;
+        self.unused.push_back(e.index());
     }
 
     /// Get a rough idea of how many entities are alive right now. Only overestimates.

@@ -83,7 +83,7 @@ impl EntityManager {
     ///
     /// Returns the number of entities created.
     pub fn next_entities(&mut self, buf: &mut [Entity], n: usize) -> usize {
-        let num = min(n, buf.len());
+        let num = ::std::cmp::min(n, buf.len());
         for i in 0..num {
             buf[i] = self.next_entity();
         }

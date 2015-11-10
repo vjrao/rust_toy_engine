@@ -13,14 +13,15 @@
 
 use std::any::{Any, TypeId};
 use std::borrow::Cow;
-use std::cell::{RefCell, Ref, RefMut};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::rc::{Rc, Weak};
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use self::component_map::*;
 use self::entity::{Entity, EntityManager};
 
+mod component_map;
 mod entity;
 
 /// A Component type must be safe to bitwise copy.
@@ -31,7 +32,7 @@ pub trait Component: Any + Copy {
 }
 
 /// A component type's unique id.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
 pub struct ComponentId(TypeId);
 
 
@@ -43,10 +44,51 @@ struct CowHandle<'a, T: Clone + 'a> {
     write: Arc<Mutex<Cow<'a, T>>>
 }
 
+impl<'a, T: Clone + 'a> CowHandle<'a, T> {
+    fn new(val: &'a T) -> Self {
+        let borrowed = Cow::Borrowed(val);
+        // would preferably do this in a way that doesn't
+        // incur the cost of creating a mutex every time.
+        CowHandle {
+            read: borrowed.clone(),
+            write: Arc::new(Mutex::new(borrowed)),
+        }
+    }
+
+    fn get_read(&self) -> &T {
+        & *self.read
+    }
+
+    fn lock_write(&self) -> MutexGuard<Cow<'a, T>> {
+        match self.write.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Consumes itself, returning Some with any new data.
+    /// None means no changes were made or that this handle is not unique.
+    fn into_inner(self) -> Option<T> {
+        let mutex = match Arc::try_unwrap(self.write) {
+            Ok(val) => val,
+            _ => return None,
+        };
+        let cow = match mutex.into_inner() {
+            Ok(val) => val,
+            Err(poisoned) => poisoned.into_inner()
+        };
+
+        match cow {
+            Cow::Owned(data) => Some(data),
+            _ => None
+        }
+    }
+}
+
 /// Maps entities to arbitrary data.
 /// Just a type alias to HashMap right now. Later, will improve.
 #[derive(Clone)]
-struct DataMap<T> {
+pub struct DataMap<T> {
     data: HashMap<Entity, T>,
 }
 
@@ -63,16 +105,6 @@ impl<T: Clone> DataMap<T> {
     fn get(&self, e: Entity) -> Option<&T> {
         self.data.get(&e)
     }
-
-    fn make_handle(&self) -> CowHandle<Self> {
-        let borrowed = Cow::Borrowed(self);
-        // would preferably do this in a way that doesn't
-        // incur the cost of creating a mutex every time.
-        CowHandle {
-            read: borrowed.clone(),
-            write: Arc::new(Mutex::new(borrowed)),
-        }
-    }
     // iterator functions.
 }
 
@@ -80,13 +112,6 @@ impl<T: Clone> DataMap<T> {
 trait DataOps {
     /// prunes dead entities away.
     fn prune(&mut self, &EntityManager);
-
-    /// Make a `CowData` from this
-    fn make_cow(&self) -> CowData;
-
-    /// Update from a given `CowData`. Guaranteed to be the same
-    /// type as this produces, behind reflection.
-    fn update_from_cow<'a>(&'a mut self, CowData<'a>);
 
     // functions for getting/setting binary data
     // will probably want to have some kind of unsafe API/trait where
@@ -110,170 +135,88 @@ impl<T: Clone + Any> DataOps for DataMap<T> {
         }
     }
 
-    fn make_cow<'a>(&'a self) -> CowData<'a> {
-        use std::mem;
+}
 
-        let static_self: &'static Self = unsafe { mem::transmute(self) };
-        let static_cow: CowHandle<'static, DataMap<T>> = static_self.make_handle();
-        CowData {
-            any: Box::new(static_cow),
-            _marker: PhantomData,
-        }
-    }
+trait Same<T> {}
+impl<A> Same<A> for A {}
 
-    fn update_from_cow<'a>(&'a mut self, cow: CowData<'a>) {
-        let handle: Box<CowHandle<'static, Self>> = cow.any.downcast().unwrap();
-        let mutex = match Arc::try_unwrap(handle.write) {
-            Ok(val) => val,
-            Err(_) => panic!("Failed to unwrap arc."),
-        };
+/// A handle for writing. Used in conjunction with DataArray.
+#[repr(C)]
+struct WriteHandle<'a, T: 'a + Clone> {
+    guard: MutexGuard<'a, Cow<'a, T>>
+}
 
-        let cow = match mutex.into_inner() {
-            Ok(val) => val,
-            Err(poisoned) => poisoned.into_inner()
-        };
+impl<'a, T: 'a + Clone> Deref for WriteHandle<'a, T> {
+    type Target = T;
 
-        // only update if the data got changed.
-        if let Cow::Owned(data) = cow {
-            *self = data
-        }
+    fn deref(&self) -> &T {
+        & **self.guard
     }
 }
 
-/// Wraps an untyped reference to a CowHandle for a specific data map.
-struct CowData<'a> {
-    // unsafe code is looking inevitable here...
-    any: Box<Any>,
-    _marker: PhantomData<&'a Any>,
-}
-
-/// All the data associated with a specific Component type.
-/// All of its fields are Rcs that refer to the same underlying object.
-struct ComponentData {
-    any: Option<Rc<Any>>,
-    data_ops: Weak<DataOps>,
-}
-
-impl DataOps for ComponentData {
-    // all the expects that occur in these functions should never trigger.
-
-    fn prune(&mut self, em: &EntityManager) {
-        self.use_data_ops(|data_ops| data_ops.prune(em));
-    }
-
-    fn make_cow(&self) -> CowData {
-        let data_ops = self.data_ops.upgrade().expect("Failed to upgrade");
-        let cow = data_ops.make_cow();
-        CowData {
-            any: cow.any,
-            _marker: PhantomData,
-        }
-    }
-
-    fn update_from_cow<'a>(&'a mut self, cow: CowData<'a>) {
-        self.use_data_ops(|data_ops| data_ops.update_from_cow(cow));
+impl<'a, T: 'a + Clone> DerefMut for WriteHandle<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.guard.to_mut()
     }
 }
 
-impl ComponentData {
-    // all the expects that occur in these functions should never trigger.
+/// A processor does some work every tick.
+pub trait Processor {
+    fn process<T: WorldHandle + Clone>(&mut self, world_handle: T) where Self: Sized;
+}
 
-    fn new<T: Component>() -> Self {
-        let data = Rc::new(DataMap::<T>::new());
-        ComponentData {
-            any: Some(data.clone()),
-            data_ops: Rc::downgrade(&(data as Rc<DataOps>)),
-        }
-    }
-
-    /// Try to get a reference to the data as a concrete type.
-    fn get_as<T: Component>(&self) -> Option<&DataMap<T>> {
-        let any = self.any.as_ref().expect("Component data is None.");
-        if any.is::<T>() { 
-            Some(any.downcast_ref().expect("Failed to downcast component data."))
-        } else {
-            None
-        }
-    }
-
-    /// Try to get a mutable reference to the data as a concrete type.
-    fn get_mut<T: Component>(&mut self) -> Option<&mut DataMap<T>> {
-        let mut_ref = self.any.as_mut().expect("Component data is None.");
-        if mut_ref.is::<T>() {
-            let any = Rc::get_mut(mut_ref).expect("More than one strong ref to component data.");
-            Some(any.downcast_mut().expect("Failed to downcast component data."))
-        } else {
-            None
-        }
-    }
-
-    /// Use the data ops in some way.
-    fn use_data_ops<F>(&mut self, f: F) where F: FnOnce(&mut DataOps) {
-        // I haven't done too much research into the circumstances
-        // in which llvm will perform devirtualisation.
-        // However, I wouldn't be surprised if those circumstances
-        // entail never reassigning trait objects.
-        // If so, this function destroys those guarantees.
-
-        // upgrade the data ops first, so we don't drop them both.
-        let mut up = self.data_ops.upgrade().expect("Failed to upgrade.");
-        // Now take out the strong ref to any, downgrade it, and destroy it.
-        let any = self.any.take().expect("Component data is None.");
-        let temp_down = Rc::downgrade(&any);
-        drop(any);
-
-        // only strong ref is the upgraded DataOps now.
-        let data_ops = Rc::get_mut(&mut up).expect("More than one strong ref");
-        f(data_ops);
-
-        self.any = Some(temp_down.upgrade().expect("Failed to upgrade."))
-
-        // the hoops I jump through to use safe code...
+impl<A: Processor, B: Processor> Processor for (A, B) {
+    fn process<T: WorldHandle + Clone>(&mut self, world_handle: T) {
+        self.0.process(world_handle.clone());
+        self.1.process(world_handle);
     }
 }
 
-// TODO (rphmeier): Make this generic over a recursive-variadic
-// that stores the component types. This will yield a variety
-// of improvements:
-// - No reflection for single-component arrays (big win)
-// - Enables work in serialization
-pub struct World {
+pub trait WorldHandle {
+}
+
+
+/// The concrete implementation of a `World`. Parameterised
+/// by the traits in the component_map module.
+pub struct World<T, P: Processor> {
     entity_manager: EntityManager,
-    data_maps: HashMap<ComponentId, ComponentData>,
+    components: T,
+    // one or more processors.
+    processors: P,
 }
 
-impl World {
-    fn process(&mut self) {
-        // make a world handle. this involves making a CowHandle
-        // for each DataMap, and a CowHandle for the EntityManager.
-        let em = CowHandle {
-            read: Cow::Borrowed(&self.entity_manager),
-            write: Arc::new(Mutex::new(Cow::Borrowed(&self.entity_manager))),
+/// The WorldHandle allows access to operations on components
+/// and entities.
+/// This is produced by the world and is how the bulk
+/// of the work is done.
+#[derive(Clone)]
+struct ConcreteWorldHandle<'a, T: 'a> {
+    entity_manager: CowHandle<'a, EntityManager>,
+    components: T,
+}
+
+impl<'a, T: SyncComponentMap> WorldHandle for ConcreteWorldHandle<'a, T> {
+
+}
+
+impl<T: ComponentMap, P: Processor> World<T, P>
+where for <'a> T: MakeCowMap<'a> {
+    pub fn process(&mut self){
+        use std::mem;
+        let new_values = {
+            let handle = ConcreteWorldHandle {
+                entity_manager: CowHandle::new(&self.entity_manager),
+                components: self.components.make_cow_map(),
+            };
+
+            self.processors.process(handle.clone());
+
+            handle.components.into_owned_map()
         };
 
-        let mut cow_data = HashMap::new();
-        for (id, data) in self.data_maps.iter() 
-
-        let wh = WorldHandle {
-            entity_manager: em,
-        };
-
-        {
-            // run threaded processors here
-        }
-
-        // run sync processors
-
-        // write out the 
+        self.components.update_from(new_values);
     }
 }
-
-#[derive(Clone)]
-pub struct WorldHandle<'a> {
-    entity_manager: CowHandle<'a, EntityManager>,
-    data_maps: HashMap<ComponentId, CowData>,
-}
-
 #[cfg(test)]
 mod tests {
 }

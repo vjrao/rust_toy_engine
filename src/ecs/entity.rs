@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::slice;
 
 // The number of bits in the id to use for the generation.
 const GEN_BITS: usize = 8;
@@ -9,8 +10,8 @@ const GEN_MASK: usize = (1 << GEN_BITS) - 1;
 const INDEX_BITS: usize = (32 - GEN_BITS);
 #[cfg(target_pointer_width = "64")]
 const INDEX_BITS: usize = (64 - GEN_BITS);
-const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
 
+const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
 // The default value for min_unused. 
 const DEFAULT_MIN_UNUSED: usize = 1024;
 
@@ -32,15 +33,16 @@ impl Entity {
             id: id
         }
     }
-
-    fn index(&self) -> usize {
-        self.id & INDEX_MASK
-    }
-
-    fn generation(&self) -> u8 {
-        ((self.id >> INDEX_BITS) & GEN_MASK) as u8
-    }
 }
+
+pub fn index_of(e: Entity) -> usize {
+    e.id & INDEX_MASK
+}
+
+pub fn generation_of(e: Entity) -> u8 {
+        ((e.id >> INDEX_BITS) & GEN_MASK) as u8
+}
+
 /// Manages the creation and destruction of entities.
 #[derive(Clone)]
 pub struct EntityManager {
@@ -92,17 +94,39 @@ impl EntityManager {
 
     /// Whether an entity is currently "alive", or exists.
     pub fn is_alive(&self, e: Entity) -> bool {
-        self.generation[e.index()] == e.generation()
+        self.generation[index_of(e)] == generation_of(e)
     }
 
     /// Destroy an entity.
     pub fn destroy_entity(&mut self, e: Entity) {
-        self.generation[e.index()] += 1;
-        self.unused.push_back(e.index());
+        let idx = index_of(e);
+        self.generation[idx] += 1;
+        self.unused.push_back(idx);
     }
 
-    /// Get a rough idea of how many entities are alive right now. Only overestimates.
-    pub fn size_hint(&self) -> usize {
-        self.generation.len()
+    /// Iterate over all living entities
+    pub fn entities(&self) -> Entities {
+        Entities {
+            index: 0,
+            generation: self.generation.iter(),
+        }
+    }
+}
+
+/// An iterator over entities.
+pub struct Entities<'a> {
+    index: usize,
+    generation: slice::Iter<'a, u8>,
+}
+
+impl<'a> Iterator for Entities<'a> {
+    type Item = Entity;
+
+    fn next(&mut self) -> Option<Entity> {
+        self.generation.next().map(|gen| {
+            let e = Entity::new(self.index, *gen);
+            self.index += 1;
+            e
+        })
     }
 }

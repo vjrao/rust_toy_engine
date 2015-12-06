@@ -111,6 +111,11 @@ impl EntityManager {
             generation: self.generation.iter(),
         }
     }
+    
+    /// Get an upper bound on the number of entities which could be live.
+    pub fn size_hint(&self) -> usize {
+        self.generation.len()
+    }
 }
 
 /// An iterator over entities.

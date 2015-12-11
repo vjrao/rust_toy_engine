@@ -810,6 +810,7 @@ pub unsafe trait Allocator {
 
 /// The Default Allocator is a stub defaulting to the heap.
 /// This is not a part of the RFC, has been added by rphmeier.
+#[derive(Clone, Copy)]
 pub struct DefaultAllocator;
 
 unsafe impl Allocator for DefaultAllocator {

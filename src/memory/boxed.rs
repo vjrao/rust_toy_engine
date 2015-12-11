@@ -9,6 +9,7 @@ use alloc::heap;
 use core::nonzero::NonZero;
 
 use std::mem;
+use std::ops::{Deref, DerefMut};
 use std::ptr;
 
 /// A boxed instance of type `T` allocated from the allocator `A`.
@@ -19,14 +20,14 @@ pub struct AllocBox<T: ?Sized, A=DefaultAllocator> where A: Allocator {
 }
 
 impl<T> AllocBox<T, DefaultAllocator> {
-	/// Create a new box with memory from the default allocator.
+	/// Create a new box using memory from the default allocator.
 	pub fn new(x: T) -> Self {
 		AllocBox::new_with(x, DefaultAllocator)
 	}	
 }
 
 impl<T, A: Allocator> AllocBox<T, A> {
-	/// Create a new box with memory from an arbitrary allocator.
+	/// Create a new box using memory from an arbitrary allocator.
 	pub fn new_with(x: T, alloc: A) -> Self {
 		let mut alloc = alloc;
 		let addr: Address = match Kind::for_value(&x) {
@@ -57,14 +58,60 @@ impl<T, A: Allocator> AllocBox<T, A> {
 	}
 }
 
+impl<T: ?Sized, A: Allocator> Deref for AllocBox<T, A> {
+	type Target = T;
+	
+	fn deref(&self) -> &T {
+		unsafe { &**self.ptr }
+	}
+}
+
+impl<T: ?Sized, A: Allocator> DerefMut for AllocBox<T, A> {
+	fn deref_mut(&mut self) -> &mut T {
+		unsafe { &mut **self.ptr }
+	}
+}
+
+impl<T: ?Sized, A> Clone for AllocBox<T, A> where T: Clone, A: Allocator + Clone {
+	fn clone(&self) -> Self {
+		let mut alloc = self.alloc.clone();
+		match Kind::for_value(&**self) {
+			Some(kind) => {
+				loop { unsafe {
+					match alloc.alloc(kind) {
+						Ok(addr) => {
+							let ptr = NonZero::new(*addr as *mut T);
+							ptr::write(*ptr, (&**self).clone());
+							return AllocBox {
+								ptr: ptr,
+								alloc: alloc
+							}
+						}
+						Err(e) => {
+							if !e.is_transient() { alloc.oom() }
+						}
+					}
+				} }
+			}
+			
+			None => {
+				AllocBox {
+					ptr: unsafe { NonZero::new(heap::EMPTY as *mut T) },
+					alloc: alloc,
+				}	
+			}
+		}
+	}
+}
+
 impl<T: ?Sized, A: Allocator> Drop for AllocBox<T, A> {
 	fn drop(&mut self) {
 		unsafe {
 			if let Some(kind) = Kind::for_value(&**self.ptr) {
 				::core::intrinsics::drop_in_place(*self.ptr);
 				
-				let ptr: Address = unsafe { NonZero::new(*self.ptr as *mut u8) };
-				self.alloc.dealloc(ptr, kind);
+				let ptr: Address = NonZero::new(*self.ptr as *mut u8);
+				let _ = self.alloc.dealloc(ptr, kind);
 			}
 		}
 	}
@@ -79,9 +126,8 @@ mod tests {
 	
 	#[test]
 	fn make_box() {
-		let b: AllocBox<u32> = AllocBox::new(5);
-		let test = AllocBox::new(Test);
-		
+		let _: AllocBox<u32> = AllocBox::new(5);
+		let _ = AllocBox::new(Test);
 	}
 	
 	#[test]
@@ -96,11 +142,18 @@ mod tests {
 		
 		let mut i = 0;
 		{
-			let inc = AllocBox::new(Incrementor {
+			let _ = AllocBox::new(Incrementor {
 				i: &mut i
 			});
 		}
 		
 		assert_eq!(i, 1);
+	}
+	
+	#[test]
+	fn cloning() {
+		let a = AllocBox::new(5);
+		let b = a.clone();
+		assert_eq!(*b, 5);
 	}
 }

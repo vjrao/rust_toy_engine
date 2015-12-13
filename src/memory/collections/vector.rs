@@ -11,7 +11,7 @@ use core::intrinsics;
 use memory::allocator::{Allocator, DefaultAllocator};
 
 use std::mem;
-use std::ops::{Index, IndexMut, Deref, DerefMut};
+use std::ops::{Deref, DerefMut};
 use std::ptr;
 use std::slice;
 
@@ -240,7 +240,7 @@ impl<T, A: Allocator> IntoIterator for Vector<T, A> {
 	type IntoIter = IntoIter<T, A>;
 	
 	#[inline]
-    fn into_iter(mut self) -> IntoIter<T, A> {
+    fn into_iter(self) -> IntoIter<T, A> {
         unsafe {
             let ptr = self.buf.ptr();
             let begin = ptr as *const T;

@@ -18,11 +18,10 @@ use alloc::heap;
 
 use core::nonzero::NonZero;
 
-use memory::allocator::{Address, Allocator, AllocError, DefaultAllocator, Kind};
+use memory::allocator::{Allocator, AllocError, DefaultAllocator, Kind};
 
-use std::ptr::Unique;
 use std::mem;
-use std::slice;
+use std::ptr::Unique;
 use std::ops::Drop;
 use std::cmp;
 
@@ -485,7 +484,7 @@ impl<T, A: Allocator> RawVec<T, A> {
 
         if amount == 0 {
             unsafe { 
-                self.alloc.dealloc(NonZero::new(*self.ptr as *mut u8), kind);
+                let _ = self.alloc.dealloc(NonZero::new(*self.ptr as *mut u8), kind);
                 self.ptr = Unique::new(heap::EMPTY as *mut _);
                 self.cap = 0;
             }
@@ -535,7 +534,7 @@ impl<T, A: Allocator> Drop for RawVec<T, A> {
             // buffer is already at least this large
             let kind = Kind::array::<T>(self.cap).unwrap();
             unsafe {
-                self.alloc.dealloc(NonZero::new(*self.ptr as *mut u8), kind);
+                let _ = self.alloc.dealloc(NonZero::new(*self.ptr as *mut u8), kind);
             }
         }
     }

@@ -10,6 +10,8 @@
 
 pub mod allocator;
 pub mod boxed;
+pub mod collections;
 
 pub use self::allocator::{Address, Allocator, DefaultAllocator, Kind};
 pub use self::boxed::AllocBox;
+pub use self::collections::Vector;

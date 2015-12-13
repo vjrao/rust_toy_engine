@@ -524,6 +524,13 @@ impl<T, A: Allocator> RawVec<T, A> {
     }
 }
 
+impl<T, A: Allocator + Clone> RawVec<T, A> {
+    /// Get a copy of the allocator which this uses.
+    pub fn clone_alloc(&self) -> A {
+        self.alloc.clone()
+    }
+}
+
 impl<T, A: Allocator> Drop for RawVec<T, A> {
     #[unsafe_destructor_blind_to_params]
     /// Frees the memory owned by the RawVec *without* trying to Drop its contents.

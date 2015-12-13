@@ -121,6 +121,17 @@ impl<T, A: Allocator> DerefMut for Vector<T, A> {
 	}
 }
 
+impl<T: Clone, A: Allocator + Clone> Clone for Vector<T, A> {
+	fn clone(&self) -> Self {
+		let alloc = self.buf.clone_alloc();
+		
+		let mut v = Vector::with_alloc_and_capacity(alloc, self.capacity());
+		for x in self.iter() { v.push(x.clone()) }
+		
+		v
+	}
+}
+
 // Iterators
 
 /// An iterator for a `Vector`

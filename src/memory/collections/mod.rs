@@ -8,4 +8,5 @@ pub mod vector;
 pub mod vec_deque;
 pub mod raw_vec;
 
+pub use self::vec_deque::VecDeque;
 pub use self::vector::Vector;

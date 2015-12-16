@@ -18,7 +18,7 @@ use alloc::heap;
 
 use core::nonzero::NonZero;
 
-use memory::allocator::{Allocator, AllocError, DefaultAllocator, Kind};
+use memory::allocator::{Allocator, DefaultAllocator, Kind};
 
 use std::mem;
 use std::ptr::Unique;
@@ -111,29 +111,29 @@ impl<T, A: Allocator> RawVec<T, A> {
     pub fn with_alloc_and_capacity(alloc: A, cap: usize) -> Self {
         let mut alloc = alloc;
         unsafe {
-            let ptr;
-            match Kind::array::<T>(cap) {
+            let ptr = match Kind::array::<T>(cap) {
                 Some(kind) => {
                     alloc_guard(*kind.size());
-                    loop {
-                        match alloc.alloc(kind) {
-                            Ok(addr) => {
-                                ptr = *addr;
-                                break;
-                            }
-                            Err(err) => {
-                                if !err.is_transient() {
-                                    alloc.oom();
-                                }
-                            }
+                    match alloc.alloc(kind) {
+                        Ok(addr) => {
+                            *addr
+                        }
+                        Err(_) => {
+                            alloc.oom();
                         }
                     }
                 }
                 
                 None => {
-                    // ZST
-                    ptr = heap::EMPTY as *mut u8;
+                    // ZST or cap is 0.
+                    heap::EMPTY as *mut u8
                 }
+            };
+            
+            let cap = if mem::size_of::<T>() == 0 {
+                !0
+            } else {
+                cap
             };
 
             RawVec {
@@ -225,19 +225,14 @@ impl<T, A: Allocator> RawVec<T, A> {
                 
                 let kind = Kind::array::<T>(new_cap).expect("capacity overflow");
                 alloc_guard(*kind.size());
-                loop {
-                    match self.alloc.alloc(kind) {
-                        Ok(addr) => {
-                            self.cap = new_cap;
-                            self.ptr = Unique::new(*addr as *mut _);
-                            break;
-                        }
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }
+                match self.alloc.alloc(kind) {
+                    Ok(addr) => {
+                        self.cap = new_cap;
+                        self.ptr = Unique::new(*addr as *mut _);
+                    }
+                    
+                    Err(_) => {
+                        self.alloc.oom()
                     }
                 }
             } else {
@@ -250,22 +245,17 @@ impl<T, A: Allocator> RawVec<T, A> {
                 alloc_guard(*kind.size());
                 let new_kind = Kind::array::<T>(new_cap).expect("capacity overflow");
                 
-                loop {
-                    match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8),
-                                             kind,
-                                             new_kind) {
-                        Ok(addr) => {
-                            self.cap = new_cap;
-                            self.ptr = Unique::new(*addr as *mut _);
-                            break;
-                        }
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }                             
+                match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8),
+                                         kind,
+                                         new_kind) {
+                    Ok(addr) => {
+                        self.cap = new_cap;
+                        self.ptr = Unique::new(*addr as *mut _);
                     }
+                    
+                    Err(_) => {
+                        self.alloc.oom();
+                    }                             
                 }
             };
         }
@@ -310,37 +300,27 @@ impl<T, A: Allocator> RawVec<T, A> {
             alloc_guard(*new_kind.size());
 
             if self.cap == 0 {
-                loop {
-                    match self.alloc.alloc(new_kind) {
-                        Ok(addr) => {
-                            self.ptr = Unique::new(*addr as *mut _);
-                            self.cap = new_cap;
-                            return;
-                        }
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }
+                match self.alloc.alloc(new_kind) {
+                    Ok(addr) => {
+                        self.ptr = Unique::new(*addr as *mut _);
+                        self.cap = new_cap;
+                    }
+                    
+                    Err(_) => {
+                        self.alloc.oom();
                     }
                 }
             } else {
                 // safe to unwrap since the creation of this request worked last time.
                 let kind = Kind::array::<T>(self.cap()).unwrap();
-                loop {
-                    match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
-                        Ok(addr) => {
-                            self.ptr = Unique::new(*addr as *mut _);
-                            self.cap = new_cap;
-                            return;
-                        }
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }
+                match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
+                    Ok(addr) => {
+                        self.ptr = Unique::new(*addr as *mut _);
+                        self.cap = new_cap;
+                    }
+                    
+                    Err(_) => {
+                        self.alloc.oom();
                     }
                 }
             }
@@ -420,37 +400,27 @@ impl<T, A: Allocator> RawVec<T, A> {
             alloc_guard(*new_kind.size());
 
             if self.cap == 0 {
-                loop {
-                    match self.alloc.alloc(new_kind) {
-                        Ok(addr) => {
-                            self.ptr = Unique::new(*addr as *mut _);
-                            self.cap = new_cap;
-                            return;
-                        }
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }
+                match self.alloc.alloc(new_kind) {
+                    Ok(addr) => {
+                        self.ptr = Unique::new(*addr as *mut _);
+                        self.cap = new_cap;
+                    }
+                    
+                    Err(_) => {
+                        self.alloc.oom();
                     }
                 }
             } else {
                 // safe to unwrap since the creation of this request worked last time.
                 let kind = Kind::array::<T>(self.cap()).unwrap();
-                loop {
-                    match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
-                        Ok(addr) => {
-                            self.ptr = Unique::new(*addr as *mut _);
-                            self.cap = new_cap;
-                            return;
-                        }
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }
+                match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
+                    Ok(addr) => {
+                        self.ptr = Unique::new(*addr as *mut _);
+                        self.cap = new_cap;
+                    }
+                    
+                    Err(_) => {
+                        self.alloc.oom();
                     }
                 }
             }
@@ -495,21 +465,14 @@ impl<T, A: Allocator> RawVec<T, A> {
                 // elem_size == 0
                 let new_kind = Kind::array::<T>(amount).unwrap();
                 
-                loop {
-                    match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), 
-                                            kind,
-                                            new_kind) {
-                        Ok(addr) => {
-                            self.ptr = Unique::new(*addr as *mut _);
-                            self.cap = amount;
-                            return;
-                        }         
-                        
-                        Err(err) => {
-                            if !err.is_transient() {
-                                self.alloc.oom();
-                            }
-                        }
+                match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
+                   Ok(addr) => {
+                        self.ptr = Unique::new(*addr as *mut _);
+                        self.cap = amount;
+                    }
+                    
+                    Err(_) => {
+                        self.alloc.oom();
                     }
                 }
             }

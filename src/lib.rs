@@ -1,6 +1,5 @@
 #![feature(
 	alloc,
-	collections_range,
 	core_intrinsics,
 	default_type_parameter_fallback,
 	dropck_parametricity,

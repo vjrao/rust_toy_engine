@@ -217,8 +217,8 @@ impl Kind {
 
     // Below family of methods *assume* inputs are pre- or
     // post-validated in some manner. (The implementations here
-    // do indirectly validate, but that is not part of their
-    // specification.)
+    ///do indirectly validate, but that is not part of their
+    /// specification.)
     //
     // Since invalid inputs could yield ill-formed kinds, these
     // methods are `unsafe`.
@@ -320,7 +320,7 @@ pub trait AllocError {
 
     /// Returns true if the error is due to hitting some resource
     /// limit or otherwise running out of memory. This condition
-    /// strongly implies that *some* series of deallocations would
+    /// serves as a hint that some series of deallocations *might*
     /// allow a subsequent reissuing of the original allocation
     /// request to succeed.
     ///
@@ -352,17 +352,6 @@ pub trait AllocError {
     /// supports satisfying memory requests where each allocated block
     /// is at most `K` bytes in size.
     fn is_request_unsupported(&self) -> bool;
-
-    /// Returns true only if the error is transient. "Transient" is
-    /// meant here in the sense that there is a reasonable chance that
-    /// re-issuing the same allocation request in the future *could*
-    /// succeed, even if nothing else changes about the overall
-    /// context of the request.
-    ///
-    /// An example where this might arise: An allocator shared across
-    /// threads that fails upon detecting interference (rather than
-    /// e.g. blocking).
-    fn is_transient(&self) -> bool { false } // most errors are not transient
 }
 
 /// The `MemoryExhausted` error represents a blanket condition
@@ -423,17 +412,22 @@ impl AllocError for AllocErr {
 ///
 /// 1. The block's starting address must be aligned to `kind.align()`.
 ///
-/// 2. The block's size must fall in the range `[orig, usable]`, where:
+/// 2. The block's size must fall in the range `[use_min, use_max]`, where:
 ///
-///    * `orig` is the size last used to allocate the block, and
+///    * `use_min` is `self.usable_size(kind).0`, and
 ///
-///    * `usable` is the capacity that was (or would have been)
+///    * `use_max` is the capacity that was (or would have been)
 ///      returned when (if) the block was allocated via a call to
 ///      `alloc_excess` or `realloc_excess`.
 ///
-/// Note that due to the constraints in the methods below, a
-/// lower-bound on `usable` can be safely approximated by a call to
-/// `usable_size`.
+/// Note that:
+///
+///  * the size of the kind most recently used to allocate the block
+///    is guaranteed to be in the range `[use_min, use_max]`, and
+///
+///  * a lower-bound on `use_max` can be safely approximated by a call to
+///    `usable_size`.
+///
 pub unsafe trait Allocator {
     /// When allocation requests cannot be satisified, an instance of
     /// this error is returned.
@@ -442,7 +436,7 @@ pub unsafe trait Allocator {
     /// `MemoryExhausted` type for this.
     type Error: AllocError + fmt::Debug;
 
-    /// Returns a pointer suitable for holding data described by
+        /// Returns a pointer suitable for holding data described by
     /// `kind`, meeting its size and alignment guarantees.
     ///
     /// The returned block of storage may or may not have its contents
@@ -459,11 +453,9 @@ pub unsafe trait Allocator {
     /// and `kind` must *fit* the provided block (see above);
     /// otherwise yields undefined behavior.
     ///
-    /// Returns `Err` only if deallocation fails in some fashion. If
-    /// the returned error is *transient*, then ownership of the
-    /// memory block is transferred back to the caller (see
-    /// `AllocError::is_transient`). Otherwise, callers must assume
-    /// that ownership of the block has been unrecoverably lost.
+    /// Returns `Err` only if deallocation fails in some fashion.
+    /// In this case callers must assume that ownership of the block has
+    /// been unrecoverably lost (memory may have been leaked).
     ///
     /// Note: Implementors are encouraged to avoid `Err`-failure from
     /// `dealloc`; most memory allocation APIs do not support
@@ -507,8 +499,20 @@ pub unsafe trait Allocator {
     /// always fail.)
     fn max_align(&self) -> Option<Alignment> { None }
 
-    /// Returns the minimum guaranteed usable size of a successful
+    /// Returns bounds on the guaranteed usable size of a successful
     /// allocation created with the specified `kind`.
+    ///
+    /// In particular, for a given kind `k`, if `usable_size(k)` returns
+    /// `(l, m)`, then one can use a block of kind `k` as if it has any
+    /// size in the range `[l, m]` (inclusive).
+    ///
+    /// (All implementors of `fn usable_size` must ensure that
+    /// `l <= k.size() <= m`)
+    ///
+    /// Both the lower- and upper-bounds (`l` and `m` respectively) are
+    /// provided: An allocator based on size classes could misbehave
+    /// if one attempts to deallocate a block without providing a
+    /// correct value for its size (i.e., one within the range `[l, m]`).
     ///
     /// Clients who wish to make use of excess capacity are encouraged
     /// to use the `alloc_excess` and `realloc_excess` instead, as
@@ -519,7 +523,9 @@ pub unsafe trait Allocator {
     /// However, for clients that do not wish to track the capacity
     /// returned by `alloc_excess` locally, this method is likely to
     /// produce useful results.
-    unsafe fn usable_size(&self, kind: Kind) -> Capacity { kind.size() }
+    unsafe fn usable_size(&self, kind: Kind) -> (Capacity, Capacity) {
+        (kind.size(), kind.size())
+    }
 
     // == METHODS FOR MEMORY REUSE ==
     // realloc. alloc_excess, realloc_excess
@@ -565,29 +571,31 @@ pub unsafe trait Allocator {
                       ptr: Address,
                       kind: Kind,
                       new_kind: Kind) -> Result<Address, Self::Error> {
+        let (min, max) = self.usable_size(kind);
+        let s = new_kind.size();
         // All Kind alignments are powers of two, so a comparison
         // suffices here (rather than resorting to a `%` operation).
-        if new_kind.size() <= self.usable_size(kind) && new_kind.align() <= kind.align() {
+        if min <= s && s <= max && new_kind.align() <= kind.align() {
             return Ok(ptr);
         } else {
             let result = self.alloc(new_kind);
             if let Ok(new_ptr) = result {
                 ptr::copy(*ptr as *const u8, *new_ptr, cmp::min(*kind.size(), *new_kind.size()));
-                loop {
-                    if let Err(err) = self.dealloc(ptr, kind) {
-                        // all we can do from the realloc abstraction
-                        // is either:
-                        //
-                        // 1. free the block we just finished copying
-                        //    into and pass the error up,
-                        // 2. ignore the dealloc error, or
-                        // 3. try again.
-                        //
-                        // They are all terrible; 1 seems unjustifiable.
-                        // So we choose 2, unless the error is transient.
-                        if err.is_transient() { continue; }
-                    }
-                    break;
+                if let Err(_) = self.dealloc(ptr, kind) {
+                    // all we can do from the realloc abstraction
+                    // is either:
+                    //
+                    // 1. free the block we just finished copying
+                    //    into and pass the error up,
+                    // 2. panic (same as if we had called `unwrap`),
+                    // 3. try to dealloc again, or
+                    // 4. ignore the dealloc error.
+                    //
+                    // They are all terrible; (1.) and (2.) seem unjustifiable,
+                    // and (3.) seems likely to yield an infinite loop (unless
+                    // we add back in some notion of a transient error
+                    // into the API).
+                    // So we choose (4.): ignore the dealloc error.
                 }
             }
             result
@@ -598,7 +606,7 @@ pub unsafe trait Allocator {
     /// the returned block. For some `kind` inputs, like arrays, this
     /// may include extra storage usable for additional data.
     unsafe fn alloc_excess(&mut self, kind: Kind) -> Result<Excess, Self::Error> {
-        self.alloc(kind).map(|p| Excess(p, self.usable_size(kind)))
+        self.alloc(kind).map(|p| Excess(p, self.usable_size(kind).1))
     }
 
     /// Behaves like `fn realloc`, but also returns the whole size of
@@ -609,7 +617,7 @@ pub unsafe trait Allocator {
                              kind: Kind,
                              new_kind: Kind) -> Result<Excess, Self::Error> {
         self.realloc(ptr, kind, new_kind)
-            .map(|p| Excess(p, self.usable_size(new_kind)))
+            .map(|p| Excess(p, self.usable_size(new_kind).1))
     }
 	
     // == COMMON USAGE PATTERNS ==
@@ -839,7 +847,8 @@ unsafe impl Allocator for DefaultAllocator {
         }
     }
     
-    unsafe fn usable_size(&self, kind: Kind) -> Capacity {
-        NonZero::new(heap::usable_size(*kind.size(), *kind.align()))
+    unsafe fn usable_size(&self, kind: Kind) -> (Capacity, Capacity) {
+        let usable = NonZero::new(heap::usable_size(*kind.size(), *kind.align()));
+        (kind.size(), usable)
     }
 }

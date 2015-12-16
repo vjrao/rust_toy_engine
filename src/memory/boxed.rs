@@ -2,7 +2,6 @@
 //! It is missing several features of `Box`, but those will be added as time and necessity allow.
 
 use super::{Address, Allocator, DefaultAllocator, Kind};
-use super::allocator::AllocError;
 
 use alloc::heap;
 
@@ -31,15 +30,12 @@ impl<T, A: Allocator> AllocBox<T, A> {
 		let mut alloc = alloc;
 		let addr: Address = match Kind::for_value(&x) {
 			Some(kind) => {
-				let ptr;
-				loop { unsafe {
+				unsafe {
 					match alloc.alloc(kind) {
-						Ok(p) => { ptr = p; break; }
-						Err(e) => { if !e.is_transient() { alloc.oom() } }
+						Ok(a) => { a }
+						Err(_) => { alloc.oom() }
 					}
-				} }
-				
-				ptr
+				}
 			}
 			
 			None => {
@@ -76,21 +72,21 @@ impl<T: ?Sized, A> Clone for AllocBox<T, A> where T: Clone, A: Allocator + Clone
 		let mut alloc = self.alloc.clone();
 		match Kind::for_value(&**self) {
 			Some(kind) => {
-				loop { unsafe {
+				unsafe {
 					match alloc.alloc(kind) {
 						Ok(addr) => {
 							let ptr = NonZero::new(*addr as *mut T);
 							ptr::write(*ptr, (&**self).clone());
-							return AllocBox {
+							AllocBox {
 								ptr: ptr,
 								alloc: alloc
 							}
 						}
-						Err(e) => {
-							if !e.is_transient() { alloc.oom() }
+						Err(_) => {
+							alloc.oom()
 						}
 					}
-				} }
+				}
 			}
 			
 			None => {

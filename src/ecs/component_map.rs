@@ -1,10 +1,13 @@
-use ecs::entity;
-use ecs::{Entity, EntityManager};
+use memory::Vector;
+
+use super::{entity, Entity, EntityManager};
+use super::world::MainAllocator;
 
 /// Maps entities to component data.
 pub struct ComponentMap<T> {
-    indices: Vec<Option<usize>>,
-    data: Vec<Entry<T>>,
+    indices: Vector<Option<usize>, MainAllocator>,
+    data: Vector<Entry<T>, MainAllocator>,
+    
     // fifo deque / linked-list of free 
     // indices.
     first_free: Option<usize>,
@@ -72,10 +75,10 @@ impl<T> ComponentMap<T> {
         self.last_free = Some(index);
     }
     
-    pub fn new() -> Self {
+    pub fn new(alloc: MainAllocator) -> Self {
         ComponentMap {
-            indices: Vec::new(),
-            data: Vec::new(),
+            indices: Vector::with_alloc(alloc),
+            data: Vector::with_alloc(alloc),
             first_free: None,
             last_free: None,
         }
@@ -155,7 +158,7 @@ impl<'a, T: 'a> MapHandle<'a, T> {
         }
     }
     
-    /// Removes the data stored for `e`. Returns the old data,
+    /// Removes the data stored for `e`. Returns the old data
     /// if it existed.
     pub fn remove(&mut self, e: Entity) -> Option<T> {
         if !self.entity_manager.is_alive(e) { return None; }
@@ -173,14 +176,17 @@ impl<'a, T: 'a> MapHandle<'a, T> {
 mod tests {
     use ecs::EntityManager;
     use super::ComponentMap;
+    use ecs::world::MainAllocator;
     
     #[test]
     fn map_basics() {
         #[derive(Debug, PartialEq, Eq)]
         struct Counter(usize);
         
-        let mut em = EntityManager::new();
-        let mut map: ComponentMap<Counter> = ComponentMap::new();
+        let alloc = MainAllocator::new();
+        
+        let mut em = EntityManager::new(alloc);
+        let mut map: ComponentMap<Counter> = ComponentMap::new(alloc);
         
         let first = em.next_entity();
         let second = em.next_entity();

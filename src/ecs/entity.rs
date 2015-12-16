@@ -1,5 +1,9 @@
-use std::collections::VecDeque;
+use memory::collections::{VecDeque, Vector};
+
+
 use std::slice;
+
+use super::world::MainAllocator;
 
 // The number of bits in the id to use for the generation.
 const GEN_BITS: usize = 8;
@@ -46,24 +50,24 @@ pub fn generation_of(e: Entity) -> u8 {
 /// Manages the creation and destruction of entities.
 #[derive(Clone)]
 pub struct EntityManager {
-    generation: Vec<u8>,
-    unused: VecDeque<usize>,
+    generation: Vector<u8, MainAllocator>,
+    unused: VecDeque<usize, MainAllocator>,
     min_unused: usize,
 }
 
 impl EntityManager {
     /// Create a new entity manager.
-    pub fn new() -> Self {
-        EntityManager::with_min_unused(DEFAULT_MIN_UNUSED)
+    pub fn new(alloc: MainAllocator) -> Self {
+        EntityManager::with_min_unused(alloc, DEFAULT_MIN_UNUSED)
     }
 
     /// Creates a new entity manager which forces
     /// there to be `min_unused` dead entities before
     /// any are recycled.
-    pub fn with_min_unused(min_unused: usize) -> Self {
+    pub fn with_min_unused(alloc: MainAllocator, min_unused: usize) -> Self {
         EntityManager {
-            generation: Vec::new(),
-            unused: VecDeque::with_capacity(min_unused + 1),
+            generation: Vector::with_alloc(alloc),
+            unused: VecDeque::with_alloc_and_capacity(alloc, min_unused + 1),
             min_unused: min_unused,
         }
     }

@@ -15,11 +15,11 @@
 //! Readers of this documentation are advised to read the official documentation for this structure
 //! as it is far more in-depth. This lacks a few features of `VecDeque`, which may be added as desired.
 
-use memory::allocator::{Address, Allocator, DefaultAllocator, Kind};
+use memory::allocator::{Allocator, DefaultAllocator};
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::iter::{repeat, FromIterator};
+use std::iter::FromIterator;
 use std::mem;
 use std::ops::{Index, IndexMut};
 use std::ptr;
@@ -117,13 +117,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 
     /// Returns the index in the underlying buffer for a given logical element
-    /// index.
-    #[inline]
-    fn wrap_index(&self, idx: usize) -> usize {
-        wrap_index(idx, self.cap())
-    }
-
-    /// Returns the index in the underlying buffer for a given logical element
     /// index + addend.
     #[inline]
     fn wrap_add(&self, idx: usize, addend: usize) -> usize {
@@ -175,130 +168,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
         ptr::copy_nonoverlapping(self.ptr().offset(src as isize),
                                  self.ptr().offset(dst as isize),
                                  len);
-    }
-
-    /// Copies a potentially wrapping block of memory len long from src to dest.
-    /// (abs(dst - src) + len) must be no larger than cap() (There must be at
-    /// most one continuous overlapping region between src and dest).
-    unsafe fn wrap_copy(&self, dst: usize, src: usize, len: usize) {
-        #[allow(dead_code)]
-        fn diff(a: usize, b: usize) -> usize {
-            if a <= b {
-                b - a
-            } else {
-                a - b
-            }
-        }
-        debug_assert!(cmp::min(diff(dst, src), self.cap() - diff(dst, src)) + len <= self.cap(),
-                      "wrc dst={} src={} len={} cap={}",
-                      dst,
-                      src,
-                      len,
-                      self.cap());
-
-        if src == dst || len == 0 {
-            return;
-        }
-
-        let dst_after_src = self.wrap_sub(dst, src) < len;
-
-        let src_pre_wrap_len = self.cap() - src;
-        let dst_pre_wrap_len = self.cap() - dst;
-        let src_wraps = src_pre_wrap_len < len;
-        let dst_wraps = dst_pre_wrap_len < len;
-
-        match (dst_after_src, src_wraps, dst_wraps) {
-            (_, false, false) => {
-                // src doesn't wrap, dst doesn't wrap
-                //
-                //        S . . .
-                // 1 [_ _ A A B B C C _]
-                // 2 [_ _ A A A A B B _]
-                //            D . . .
-                //
-                self.copy(dst, src, len);
-            }
-            (false, false, true) => {
-                // dst before src, src doesn't wrap, dst wraps
-                //
-                //    S . . .
-                // 1 [A A B B _ _ _ C C]
-                // 2 [A A B B _ _ _ A A]
-                // 3 [B B B B _ _ _ A A]
-                //    . .           D .
-                //
-                self.copy(dst, src, dst_pre_wrap_len);
-                self.copy(0, src + dst_pre_wrap_len, len - dst_pre_wrap_len);
-            }
-            (true, false, true) => {
-                // src before dst, src doesn't wrap, dst wraps
-                //
-                //              S . . .
-                // 1 [C C _ _ _ A A B B]
-                // 2 [B B _ _ _ A A B B]
-                // 3 [B B _ _ _ A A A A]
-                //    . .           D .
-                //
-                self.copy(0, src + dst_pre_wrap_len, len - dst_pre_wrap_len);
-                self.copy(dst, src, dst_pre_wrap_len);
-            }
-            (false, true, false) => {
-                // dst before src, src wraps, dst doesn't wrap
-                //
-                //    . .           S .
-                // 1 [C C _ _ _ A A B B]
-                // 2 [C C _ _ _ B B B B]
-                // 3 [C C _ _ _ B B C C]
-                //              D . . .
-                //
-                self.copy(dst, src, src_pre_wrap_len);
-                self.copy(dst + src_pre_wrap_len, 0, len - src_pre_wrap_len);
-            }
-            (true, true, false) => {
-                // src before dst, src wraps, dst doesn't wrap
-                //
-                //    . .           S .
-                // 1 [A A B B _ _ _ C C]
-                // 2 [A A A A _ _ _ C C]
-                // 3 [C C A A _ _ _ C C]
-                //    D . . .
-                //
-                self.copy(dst + src_pre_wrap_len, 0, len - src_pre_wrap_len);
-                self.copy(dst, src, src_pre_wrap_len);
-            }
-            (false, true, true) => {
-                // dst before src, src wraps, dst wraps
-                //
-                //    . . .         S .
-                // 1 [A B C D _ E F G H]
-                // 2 [A B C D _ E G H H]
-                // 3 [A B C D _ E G H A]
-                // 4 [B C C D _ E G H A]
-                //    . .         D . .
-                //
-                debug_assert!(dst_pre_wrap_len > src_pre_wrap_len);
-                let delta = dst_pre_wrap_len - src_pre_wrap_len;
-                self.copy(dst, src, src_pre_wrap_len);
-                self.copy(dst + src_pre_wrap_len, 0, delta);
-                self.copy(0, delta, len - dst_pre_wrap_len);
-            }
-            (true, true, true) => {
-                // src before dst, src wraps, dst wraps
-                //
-                //    . .         S . .
-                // 1 [A B C D _ E F G H]
-                // 2 [A A B D _ E F G H]
-                // 3 [H A B D _ E F G H]
-                // 4 [H A B D _ E F F G]
-                //    . . .         D .
-                //
-                debug_assert!(src_pre_wrap_len > dst_pre_wrap_len);
-                let delta = src_pre_wrap_len - dst_pre_wrap_len;
-                self.copy(delta, 0, len - src_pre_wrap_len);
-                self.copy(0, self.cap() - delta, delta);
-                self.copy(dst, src, dst_pre_wrap_len);
-            }
-        }
     }
 
     /// Frobs the head and tail sections around to handle the fact that we

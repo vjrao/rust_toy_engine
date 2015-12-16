@@ -824,6 +824,7 @@ pub struct DefaultAllocator;
 unsafe impl Allocator for DefaultAllocator {
     type Error = MemoryExhausted;
     
+    #[inline]
     unsafe fn alloc(&mut self, kind: Kind) -> Result<Address, Self::Error> {
         let ptr = heap::allocate(*kind.size(), *kind.align());
         if !ptr.is_null() {
@@ -833,11 +834,13 @@ unsafe impl Allocator for DefaultAllocator {
         }
     }
     
+    #[inline]
     unsafe fn dealloc(&mut self, ptr: Address, kind: Kind) -> Result<(), Self::Error> {
         heap::deallocate(*ptr, *kind.size(), *kind.align());
         Ok(())
     }
     
+    #[inline]
     unsafe fn realloc(&mut self, ptr: Address, kind: Kind, new_kind: Kind) -> Result<Address, Self::Error> {
         let p = heap::reallocate(*ptr, *kind.size(), *new_kind.size(), *new_kind.align());
         if !p.is_null() {
@@ -847,6 +850,7 @@ unsafe impl Allocator for DefaultAllocator {
         }
     }
     
+    #[inline]
     unsafe fn usable_size(&self, kind: Kind) -> (Capacity, Capacity) {
         let usable = NonZero::new(heap::usable_size(*kind.size(), *kind.align()));
         (kind.size(), usable)

@@ -810,7 +810,7 @@ pub unsafe trait Allocator {
 
 /// The Default Allocator is a stub defaulting to the heap.
 /// This is not a part of the RFC, has been added by rphmeier.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct DefaultAllocator;
 
 unsafe impl Allocator for DefaultAllocator {
@@ -828,6 +828,15 @@ unsafe impl Allocator for DefaultAllocator {
     unsafe fn dealloc(&mut self, ptr: Address, kind: Kind) -> Result<(), Self::Error> {
         heap::deallocate(*ptr, *kind.size(), *kind.align());
         Ok(())
+    }
+    
+    unsafe fn realloc(&mut self, ptr: Address, kind: Kind, new_kind: Kind) -> Result<Address, Self::Error> {
+        let p = heap::reallocate(*ptr, *kind.size(), *new_kind.size(), *new_kind.align());
+        if !p.is_null() {
+            Ok(NonZero::new(p))
+        } else {
+            Err(MemoryExhausted)
+        }
     }
     
     unsafe fn usable_size(&self, kind: Kind) -> Capacity {

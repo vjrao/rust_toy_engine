@@ -4,7 +4,8 @@
 //! into `std`, I have made the deliberate decision not to agonize excessively over minor optimizations,
 //! instead choosing to get these up and working.
 
-pub mod raw_vec;
 pub mod vector;
+pub mod vec_deque;
+pub mod raw_vec;
 
 pub use self::vector::Vector;

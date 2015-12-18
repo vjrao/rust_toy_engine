@@ -7,7 +7,8 @@ use alloc::heap;
 
 use core::nonzero::NonZero;
 
-use std::ops::{Deref, DerefMut};
+use std::marker::Unsize;
+use std::ops::{CoerceUnsized, Deref, DerefMut};
 use std::ptr::{self, Unique};
 
 /// A boxed instance of type `T` allocated from the allocator `A`.
@@ -51,6 +52,26 @@ impl<T, A: Allocator> AllocBox<T, A> {
 			alloc: alloc,
 		}	
 	}
+	
+	/// Manually move the value out of this box. This is an unfortunate workaround due to the fact
+	/// that `Box` supports moving out due to compiler magic, and this type does not have that convenience.
+	pub fn take(self) -> T {
+		use std::mem;
+		
+		let mut this = self;
+		let val = unsafe { ptr::replace(*this.ptr, mem::uninitialized()) };
+		
+		if let Some(kind) = Kind::for_value(&val) {
+			debug_assert!(*this.ptr != heap::EMPTY as *mut T);
+			unsafe { 
+				let ptr = NonZero::new(*this.ptr as *mut u8);
+				let _ = this.alloc.dealloc(ptr, kind);	
+			}
+		}
+		
+		mem::forget(this);
+		val
+	}
 }
 
 impl<T: ?Sized, A: Allocator> Deref for AllocBox<T, A> {
@@ -67,35 +88,9 @@ impl<T: ?Sized, A: Allocator> DerefMut for AllocBox<T, A> {
 	}
 }
 
-impl<T: ?Sized, A> Clone for AllocBox<T, A> where T: Clone, A: Allocator + Clone {
+impl<T, A> Clone for AllocBox<T, A> where T: Clone, A: Allocator + Clone {
 	fn clone(&self) -> Self {
-		let mut alloc = self.alloc.clone();
-		match Kind::for_value(&**self) {
-			Some(kind) => {
-				unsafe {
-					match alloc.alloc(kind) {
-						Ok(addr) => {
-							let ptr = Unique::new(*addr as *mut T);
-							ptr::write(*ptr, (&**self).clone());
-							AllocBox {
-								ptr: ptr,
-								alloc: alloc
-							}
-						}
-						Err(_) => {
-							alloc.oom()
-						}
-					}
-				}
-			}
-			
-			None => {
-				AllocBox {
-					ptr: unsafe { Unique::new(heap::EMPTY as *mut T) },
-					alloc: alloc,
-				}	
-			}
-		}
+		AllocBox::in_alloc((**self).clone(), self.alloc.clone())
 	}
 }
 
@@ -111,6 +106,35 @@ impl<T: ?Sized, A: Allocator> Drop for AllocBox<T, A> {
 		}
 	}
 }
+
+impl<T: ?Sized, U: ?Sized, A: Allocator> CoerceUnsized<AllocBox<U, A>> for AllocBox<T, A> 
+where T: Unsize<U> {}
+
+/// A version of `FnOnce` intended to be used with boxed functions.
+pub trait FnBox<Args, Alloc: Allocator> {
+	type Output;
+	
+	fn call_box(this: AllocBox<Self, Alloc>, args: Args) -> Self::Output;
+}
+
+impl<Args, Alloc, F> FnBox<Args, Alloc> for F where Alloc: Allocator, F: FnOnce<Args> {
+	type Output = F::Output;
+	
+	#[inline]
+	fn call_box(this: AllocBox<Self, Alloc>, args: Args) -> Self::Output {
+		this.take().call_once(args)
+	}
+}
+
+impl<Alloc, Args, F> FnOnce<Args> for AllocBox<F, Alloc> where Alloc: Allocator, F: FnOnce<Args> {
+	type Output = F::Output;
+	
+	#[inline]
+	extern "rust-call" fn call_once(self, args: Args) -> Self::Output {
+		FnBox::call_box(self, args)
+	}
+}
+
 
 #[cfg(test)]
 mod tests {

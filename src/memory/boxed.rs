@@ -8,6 +8,7 @@ use alloc::heap;
 use core::nonzero::NonZero;
 
 use std::marker::Unsize;
+use std::mem;
 use std::ops::{CoerceUnsized, Deref, DerefMut};
 use std::ptr::{self, Unique};
 
@@ -71,6 +72,29 @@ impl<T, A: Allocator> AllocBox<T, A> {
 		
 		mem::forget(this);
 		val
+	}
+	
+}
+
+impl<T: ?Sized, A: Allocator> AllocBox<T, A> {
+	/// Turn this into its raw parts, a pointer and an allocator.
+	/// Since the memory layout of `AllocBox` is unspecified,
+	/// the only safe way to dispose of these is to call
+	/// `from_raw_parts` with the given parts.
+	pub unsafe fn into_raw_parts(self) -> (*mut T, A) {
+		let raw_ptr: *mut T = *self.ptr;
+		let alloc: A = ptr::read(&self.alloc);
+		mem::forget(self);
+		(raw_ptr, alloc)
+	}
+	
+	/// Build an `AllocBox` from raw parts. These will usually be the same ones
+	/// returned from `into_raw_parts`
+	pub unsafe fn from_raw_parts(ptr: *mut T, alloc: A) -> Self {
+		AllocBox {
+			ptr: Unique::new(ptr),
+			alloc: alloc,
+		}
 	}
 }
 

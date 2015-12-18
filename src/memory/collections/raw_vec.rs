@@ -19,11 +19,13 @@ use alloc::heap;
 use core::nonzero::NonZero;
 
 use memory::allocator::{Allocator, DefaultAllocator, Kind};
+use memory::AllocBox;
 
-use std::mem;
-use std::ptr::Unique;
-use std::ops::Drop;
 use std::cmp;
+use std::mem;
+use std::ptr::{self, Unique};
+use std::ops::Drop;
+use std::slice;
 
 /// A low-level utility for more ergonomically allocating, reallocating, and deallocating a
 /// a buffer of memory from an allocator without having to worry about all the corner cases
@@ -476,6 +478,18 @@ impl<T, A: Allocator> RawVec<T, A> {
                     }
                 }
             }
+        }
+    }
+    
+    /// Convert this into a boxed slice.
+    pub fn into_box(self) -> AllocBox<[T], A> {
+        unsafe { 
+            let slice = slice::from_raw_parts_mut(self.ptr(), self.cap);
+            let alloc: A = ptr::read(&self.alloc);
+            let output: AllocBox<[T], A> = AllocBox::from_raw_parts(slice, alloc);
+            mem::forget(self);
+            
+            output
         }
     }
 

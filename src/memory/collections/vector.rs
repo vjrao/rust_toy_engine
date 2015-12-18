@@ -9,6 +9,7 @@ use alloc::heap;
 use core::intrinsics;
 
 use memory::allocator::{Allocator, DefaultAllocator};
+use memory::AllocBox;
 
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -74,6 +75,21 @@ impl<T, A: Allocator> Vector<T, A> {
 	/// Reserve space for exactly `n` additional elements.
 	pub fn reserve_exact(&mut self, n: usize) {
 		self.buf.reserve_exact(self.len, n);
+	}
+	
+	/// Shrinks the capacity of the vector as much as possible.
+	pub fn shrink_to_fit(&mut self) {
+		self.buf.shrink_to_fit(self.len);
+	}
+	
+	pub fn into_boxed_slice(mut self) -> AllocBox<[T], A> {
+		unsafe {
+			self.shrink_to_fit();
+			let buf = ptr::read(&self.buf);
+			mem::forget(self);
+			
+			buf.into_box()
+		}
 	}
 	
 	/// Push an element onto the vector.

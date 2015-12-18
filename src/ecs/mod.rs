@@ -1,6 +1,6 @@
-mod component_map;
-mod component_list;
+pub mod component;
 mod entity;
 mod world;
 
-pub use ecs::entity::{Entity, EntityManager};
+pub use self::component::Component;
+pub use self::entity::{Entity, EntityManager};

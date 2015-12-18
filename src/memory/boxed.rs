@@ -138,7 +138,7 @@ impl<Alloc, Args, F> FnOnce<Args> for AllocBox<F, Alloc> where Alloc: Allocator,
 
 #[cfg(test)]
 mod tests {
-	use super::AllocBox;
+	use super::*;
 	
 	// ZST used for testing.
 	struct Test;
@@ -174,5 +174,16 @@ mod tests {
 		let a = AllocBox::new(5);
 		let b = a.clone();
 		assert_eq!(*b, 5);
+	}
+	
+	#[test]
+	fn fnbox() {
+		let mut val = 0;
+		{
+			let b = AllocBox::new(|| val += 1);
+			FnBox::call_box(b, ());
+		}
+		
+		assert_eq!(val, 1);
 	}
 }

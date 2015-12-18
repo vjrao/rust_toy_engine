@@ -33,8 +33,8 @@ impl Job {
 		
 		unsafe { assert!(!intrinsics::needs_drop::<F>(), "Job functions cannot have destructors."); }
 		
-		assert!(mem::align_of::<F>() < mem::align_of::<[u64; ARR_SIZE]>(), "Function alignment requirement is too high.");
-		assert!(mem::size_of::<F>() < ARR_SIZE * 8, "Function environment too large.");
+		assert!(mem::align_of::<F>() <= mem::align_of::<[u64; ARR_SIZE]>(), "Function alignment requirement is too high.");
+		assert!(mem::size_of::<F>() <= ARR_SIZE * 8, "Function environment too large.");
 		
 		let mut raw_data = [0u64; ARR_SIZE];
 		
@@ -66,7 +66,7 @@ impl Job {
 				vtable: self.vtable,
 			};
 			
-			let mut fn_ptr: *mut FnMut<Args, Output=()> = mem::transmute(t_obj);
+			let fn_ptr: *mut FnMut<Args, Output=()> = mem::transmute(t_obj);
 			(*fn_ptr).call_mut(args);
 		}
 	}

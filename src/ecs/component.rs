@@ -19,11 +19,14 @@ use std::sync::{Mutex, MutexGuard};
 use super::{entity, Entity, EntityManager};
 use super::world::WorldAllocator;
 
+/// Components are arbitrary data associated with entities.
 pub trait Component: Any {}
+
+impl<T: Any> Component for T {}
 
 /// Maps entities to component data. This must be supplied with an entity manager
 /// to be made usable. 
-pub struct ComponentMap<T> {
+pub struct ComponentMap<T: Component> {
     indices: Vector<Option<usize>, WorldAllocator>,
     data: Vector<Entry<T>, WorldAllocator>,
     
@@ -58,9 +61,10 @@ impl<T> Entry<T> {
 
 struct FullEntry<T> {
     data: T,
+    entity: Entity,
 }
 
-impl<T> ComponentMap<T> {
+impl<T: Component> ComponentMap<T> {
     // Pop the first value from the free list.
     // None if there isn't one.
     fn freelist_pop(&mut self) -> Option<usize> {
@@ -119,12 +123,12 @@ impl<T> ComponentMap<T> {
     }
 }
 
-pub struct MapHandle<'a, T: 'a> {
+pub struct MapHandle<'a, T: 'a + Component> {
     map: &'a mut ComponentMap<T>,
     entity_manager: &'a EntityManager, 
 }
 
-impl<'a, T: 'a> MapHandle<'a, T> {
+impl<'a, T: 'a + Component> MapHandle<'a, T> {
     /// Set the data stored for `e` to the value stored in `data`.
     pub fn set(&mut self, e: Entity, data: T) {
         if !self.entity_manager.is_alive(e) { return; }
@@ -132,6 +136,7 @@ impl<'a, T: 'a> MapHandle<'a, T> {
         let entity_index = entity::index_of(e);
         let entry = Entry::Full(FullEntry {
             data: data,
+            entity: e,
         });
         
         if let Some(index) = self.map.indices[entity_index].clone() {
@@ -379,10 +384,14 @@ impl<T: Component, P: IntoMutexComponentMaps> IntoMutexComponentMaps for ListEnt
 }
 
 /// A type that can be roundtripped into a MutexComponentMaps and back again.
-pub trait RoundTrip: IntoMutexComponentMaps {}
+pub trait RoundTrip: IntoMutexComponentMaps {
+    type Output: IntoComponentMaps;
+}
 
 impl<T: ComponentMaps + IntoMutexComponentMaps> RoundTrip for T where
-<T as IntoMutexComponentMaps>::Output: IntoComponentMaps<Output=T> {}
+<T as IntoMutexComponentMaps>::Output: IntoComponentMaps<Output=T> {
+    type Output = <Self as IntoMutexComponentMaps>::Output;
+}
 
 
 #[cfg(test)]

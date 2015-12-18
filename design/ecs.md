@@ -1,1 +1,0 @@
-Separate creation of query data vs. population of it.

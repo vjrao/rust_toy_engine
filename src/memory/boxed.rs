@@ -8,25 +8,25 @@ use alloc::heap;
 use core::nonzero::NonZero;
 
 use std::ops::{Deref, DerefMut};
-use std::ptr;
+use std::ptr::{self, Unique};
 
 /// A boxed instance of type `T` allocated from the allocator `A`.
 /// This defaults to the default allocator, which is the heap.
 pub struct AllocBox<T: ?Sized, A=DefaultAllocator> where A: Allocator {
-	ptr: NonZero<*mut T>,
+	ptr: Unique<T>,
 	alloc: A,
 }
 
 impl<T> AllocBox<T, DefaultAllocator> {
 	/// Create a new box using memory from the default allocator.
 	pub fn new(x: T) -> Self {
-		AllocBox::new_with(x, DefaultAllocator)
+		AllocBox::in_alloc(x, DefaultAllocator)
 	}	
 }
 
 impl<T, A: Allocator> AllocBox<T, A> {
 	/// Create a new box using memory from an arbitrary allocator.
-	pub fn new_with(x: T, alloc: A) -> Self {
+	pub fn in_alloc(x: T, alloc: A) -> Self {
 		let mut alloc = alloc;
 		let addr: Address = match Kind::for_value(&x) {
 			Some(kind) => {
@@ -43,7 +43,7 @@ impl<T, A: Allocator> AllocBox<T, A> {
 			}
 		};
 		
-		let ptr: NonZero<*mut T> = unsafe { NonZero::new(*addr as *mut T) };
+		let ptr: Unique<T> = unsafe { Unique::new(*addr as *mut T) };
 		unsafe { ptr::write(*ptr, x) }
 		
 		AllocBox {
@@ -75,7 +75,7 @@ impl<T: ?Sized, A> Clone for AllocBox<T, A> where T: Clone, A: Allocator + Clone
 				unsafe {
 					match alloc.alloc(kind) {
 						Ok(addr) => {
-							let ptr = NonZero::new(*addr as *mut T);
+							let ptr = Unique::new(*addr as *mut T);
 							ptr::write(*ptr, (&**self).clone());
 							AllocBox {
 								ptr: ptr,
@@ -91,7 +91,7 @@ impl<T: ?Sized, A> Clone for AllocBox<T, A> where T: Clone, A: Allocator + Clone
 			
 			None => {
 				AllocBox {
-					ptr: unsafe { NonZero::new(heap::EMPTY as *mut T) },
+					ptr: unsafe { Unique::new(heap::EMPTY as *mut T) },
 					alloc: alloc,
 				}	
 			}

@@ -59,7 +59,11 @@ impl Job {
 		}
 	}
 	
-	fn call(self, args: Args) {
+	// Any unsafety that could occur when using a `Job` occurs here:
+	//   - captured data escaping its lifetime
+	//   - calling an invalid `Job` structure
+	// users of this method (me!) must be careful to avoid such cases. 
+	unsafe fn call(self, args: Args) {
 		unsafe {
 			let t_obj = TraitObject {
 				data: &self.raw_data[0] as *const _ as *mut (),
@@ -72,16 +76,90 @@ impl Job {
 	}
 }
 
+type QueueEntry = RefCell<Option<Job>>;
+
+// a fixed size ring buffer for storing jobs.
+// each worker will have one of these, as well as a
+// reference to the other workers'.
+//
+// This is not yet lock-free. Currently, it locks,
+// but I will move to a lock-free implementation shortly.
+// a worker manages the private, front end of its queue.
+// other workers, when idle, may steal from the public, back end of the queue.
+struct Queue<A: Allocator> {
+	buf: AllocBox<[QueueEntry], A>,
+	// (bottom, top)
+	ends: Mutex<(isize, isize)>,
+	len: usize,
+}
+
+impl<A: Allocator> Queue<A> {
+	// create a new queue with the given length using memory from the allocator.
+	// the length must be a power of two.
+	fn new(len: usize, alloc: A) -> Self {
+		assert!(len.is_power_of_two(), "Job queue size must be a power of two.");
+		let mut v = Vector::with_alloc_and_capacity(alloc, len);
+		for _ in 0..len {
+			v.push(RefCell::new(None));
+		}
+		
+		Queue {
+			buf: v.into_boxed_slice(),
+			ends: Mutex::new((0, 0)),
+			len: len,
+		}
+	}
+	
+	// Push a job onto the private end of the queue.
+	fn push(&self, job: Job) {
+		let mut ends = self.ends.lock().unwrap();
+		
+		let mut slot = self.buf[(ends.0 & (self.len - 1) as isize) as usize].borrow_mut();
+		*slot = Some(job);
+		ends.0 += 1;
+	}
+	
+	// Pop a job from the private end of the queue.
+	fn pop(&self) -> Option<Job> {
+		let mut ends = self.ends.lock().unwrap();
+		
+		// bottom will either equal top, or be greater
+		if ends.0 - ends.1 <= 0 {
+			None
+		} else {
+			ends.0 -= 1;
+			let job = self.buf[(ends.0 & (self.len - 1) as isize) as usize].borrow_mut().take();
+			debug_assert!(job.is_some());
+			job
+		}
+	}
+	
+	// Steal a job from the public end of the queue.
+	fn steal(&self) -> Option<Job> {
+		let mut ends = self.ends.lock().unwrap();
+		
+		if ends.0 - ends.1 <= 0 {
+			None
+		} else {
+			let job = self.buf[(ends.1 & (self.len - 1) as isize) as usize].borrow_mut().take();
+			debug_assert!(job.is_some());
+			ends.1 += 1;
+			
+			job
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
-	use super::Job;
+	use super::{Job, Queue};
 	
 	#[test]
 	fn job_basics() {
 		let mut i = 0;
 		{
 			let j = Job::new(|| i += 1);
-			j.call(());
+			unsafe { j.call(()) };
 		}
 		assert_eq!(i, 1);
 	}

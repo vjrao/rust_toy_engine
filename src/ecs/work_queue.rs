@@ -8,7 +8,7 @@ use std::mem;
 use std::ptr;
 use std::raw::TraitObject;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicIsize, fence, Ordering};
 use std::thread;
 
 // Arguments that job functions take.
@@ -82,17 +82,23 @@ type QueueEntry = RefCell<Option<Job>>;
 // each worker will have one of these, as well as a
 // reference to the other workers'.
 //
-// This is not yet lock-free. Currently, it locks,
-// but I will move to a lock-free implementation shortly.
-// a worker manages the private, front end of its queue.
-// other workers, when idle, may steal from the public, back end of the queue.
+// This is lock-free, built upon the assumption that 
+// a worker manages the private, bottom end of its queue.
+// other workers, when idle, may steal from the public, top end of the queue.
 struct Queue<A: Allocator> {
 	buf: AllocBox<[QueueEntry], A>,
 	// (bottom, top)
-	ends: Mutex<(isize, isize)>,
+	top: AtomicIsize,
+	bottom: AtomicIsize,
 	len: usize,
 }
 
+// transforms a (possibly negative) index into a wrapped index in the range
+// [0, self.len - 1].
+fn wraparound_index(idx: isize, len: usize) -> usize {
+	(idx & ((len - 1) as isize)) as usize
+}
+	
 impl<A: Allocator> Queue<A> {
 	// create a new queue with the given length using memory from the allocator.
 	// the length must be a power of two.
@@ -105,47 +111,106 @@ impl<A: Allocator> Queue<A> {
 		
 		Queue {
 			buf: v.into_boxed_slice(),
-			ends: Mutex::new((0, 0)),
+			top: AtomicIsize::new(0),
+			bottom: AtomicIsize::new(0),
 			len: len,
 		}
 	}
 	
 	// Push a job onto the private end of the queue.
-	fn push(&self, job: Job) {
-		let mut ends = self.ends.lock().unwrap();
+	// this can only be done from the thread which logically owns this queue!
+	unsafe fn push(&self, job: Job) {
+		let (top, bottom) = (self.top.load(Ordering::SeqCst), self.bottom.load(Ordering::SeqCst));
 		
-		let mut slot = self.buf[(ends.0 & (self.len - 1) as isize) as usize].borrow_mut();
+		let idx = wraparound_index(bottom, self.len);
+		
+		// FIXME: rustc is saying this borrows self mutably when put in one line.
+		// I've split it into two for now, but maybe later I can conglomerate them again.
+		let mut slot = self.buf[idx].borrow_mut();
 		*slot = Some(job);
-		ends.0 += 1;
+		
+		fence(Ordering::SeqCst);
+		self.bottom.fetch_add(1, Ordering::SeqCst);
 	}
 	
 	// Pop a job from the private end of the queue.
-	fn pop(&self) -> Option<Job> {
-		let mut ends = self.ends.lock().unwrap();
+	// this can only be done from the thread which logically owns this queue!
+	unsafe fn pop(&self) -> Option<Job> {
+		// loop until the queue is empty or we get a job!
+		let (top, new_bottom) = (self.top.load(Ordering::SeqCst), self.bottom.load(Ordering::SeqCst) - 1);		
+		self.bottom.store(new_bottom, Ordering::SeqCst);
 		
-		// bottom will either equal top, or be greater
-		if ends.0 - ends.1 <= 0 {
+		if new_bottom <= top {
+			// empty queue.
+			// set bottom = top just in case it wasn't already
+			self.bottom.store(top, Ordering::SeqCst);
 			None
 		} else {
-			ends.0 -= 1;
-			let job = self.buf[(ends.0 & (self.len - 1) as isize) as usize].borrow_mut().take();
-			debug_assert!(job.is_some());
-			job
+			// non-empty
+			
+			let idx = wraparound_index(new_bottom, self.len);
+			let j = unsafe {
+				ptr::read(&*self.buf[idx].borrow())
+			};
+			
+			if top != new_bottom {
+				// many items in queue.
+				debug_assert!(j.is_some(), "popped job was empty. Top: {}, Bottom: {}", top, new_bottom);
+				j
+			} else {
+				// last item in queue. set bottom = top + 1.
+				
+				// may be racing against a steal operation, so 
+				// try to increment the top and see what the state is.
+				if self.top.compare_and_swap(top, top + 1, Ordering::SeqCst) != top {
+					// lost a race. set bottom to top + 1
+					// since the queue is now empty, and the steal
+					// must have incremented top
+					self.bottom.store(top + 1, Ordering::SeqCst);
+					None
+				} else {
+					// won the race (if there was one).
+					// set bottom = top + 1 and the job slot to None.
+					// I have chosen to repeat myself here for the sake of explicitness.
+					let mut slot = self.buf[idx].borrow_mut();
+					*slot = None;
+					
+					self.bottom.store(top + 1, Ordering::SeqCst);
+					debug_assert!(j.is_some(), "popped job was empty. Top: {}, Bottom: {}", top, new_bottom);
+					j
+				}
+			}
 		}
 	}
 	
-	// Steal a job from the public end of the queue.
+	// Try to steal a job from the public end of the queue.
 	fn steal(&self) -> Option<Job> {
-		let mut ends = self.ends.lock().unwrap();
+		let (top, bottom) = (self.top.load(Ordering::SeqCst), self.bottom.load(Ordering::SeqCst));
 		
-		if ends.0 - ends.1 <= 0 {
+		if bottom <= top {
+			// empty queue.
 			None
 		} else {
-			let job = self.buf[(ends.1 & (self.len - 1) as isize) as usize].borrow_mut().take();
-			debug_assert!(job.is_some());
-			ends.1 += 1;
+			// non-empty queue.
+			// we may be competing with concurrent pop or steal calls.
+			let idx = wraparound_index(top, self.len);
+			let j = unsafe {
+				ptr::read(&*self.buf[idx].borrow())
+			};
 			
-			job
+			if self.top.compare_and_swap(top, top + 1, Ordering::SeqCst) != top {
+				// lost a race.
+				None
+			} else {
+				// won a race. store `None` in the job slot again.
+				let mut slot = self.buf[idx].borrow_mut();
+				*slot = None;
+				
+				// any jobs that were in the ostensibly full part of the queue should be valid!
+				debug_assert!(j.is_some(), "stolen job was empty. Top: {}, Bottom: {}", top, bottom);
+				
+				j
+			}
 		}
 	}
 }
@@ -153,6 +218,7 @@ impl<A: Allocator> Queue<A> {
 #[cfg(test)]
 mod tests {
 	use super::{Job, Queue};
+	use memory::allocator::DefaultAllocator;
 	
 	#[test]
 	fn job_basics() {
@@ -162,5 +228,26 @@ mod tests {
 			unsafe { j.call(()) };
 		}
 		assert_eq!(i, 1);
+	}
+	
+	#[test]
+	fn queue_basics() {
+		let mut i = 0;
+		{
+			let queue = Queue::new(256, DefaultAllocator);
+			for _ in 0..5 {
+				unsafe { queue.push(Job::new(|| i += 1)); }
+			}
+			
+			// no way these should fail.
+			unsafe { queue.pop().unwrap().call(()); }
+			for _ in 0..4 {
+				unsafe { queue.steal().unwrap().call(()); }
+			}
+			
+			unsafe { assert!(queue.pop().is_none()); }
+			assert!(queue.steal().is_none());
+		}
+		assert_eq!(i, 5);
 	}
 }

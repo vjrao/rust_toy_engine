@@ -11,6 +11,7 @@ use core::intrinsics;
 use memory::allocator::{Allocator, DefaultAllocator};
 use memory::AllocBox;
 
+use std::iter::FromIterator;
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::ptr;
@@ -149,6 +150,17 @@ impl<T: Clone, A: Allocator + Clone> Clone for Vector<T, A> {
 }
 
 // Iterators
+impl<T, A: Allocator + Default> FromIterator<T> for Vector<T, A> {
+    fn from_iter<I: IntoIterator<Item=T>>(iterable: I) -> Self {
+        let iter = iterable.into_iter();
+        let (lower, _) = iter.size_hint();
+        
+        let mut v = Vector::with_alloc_and_capacity(Default::default(), lower);
+        for x in iter { v.push(x) }
+        
+        v
+    }
+}
 
 /// An iterator for a `Vector`
 pub struct IntoIter<T, A=DefaultAllocator> where A: Allocator {

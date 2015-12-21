@@ -13,11 +13,8 @@ use std::ptr;
 use std::raw::TraitObject;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, fence, Ordering};
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
-
-// Arguments that job functions take.
-type Args = ();
 
 const JOB_SIZE: usize = 256;
 const ARR_SIZE: usize = (JOB_SIZE / 8) - 1;
@@ -27,7 +24,7 @@ const MAX_JOBS: usize = 4096;
 // virtual wrapper for arbitrary function.
 // the virtualization here is an acceptable overhead.
 trait Code {
-	unsafe fn call(&mut self, args: Args);	
+	unsafe fn call(&mut self, args: &Worker);	
 }
 
 // the result of a computation.
@@ -69,9 +66,9 @@ struct CodeImpl<F, R> {
 	dest: *mut JobResult<R>,
 }
 
-impl<F, R: Send> Code for CodeImpl<F, R> where F: FnMut(Args) -> R {
+impl<F, R: Send> Code for CodeImpl<F, R> where F: FnMut(&Worker) -> R {
 	#[inline]
-	unsafe fn call(&mut self, args: Args) {
+	unsafe fn call(&mut self, args: &Worker) {
 		let res = (self.func)(args);
 		(*self.dest).set(res);
 	}
@@ -92,7 +89,7 @@ struct Job {
 impl Job {
 	// create a new job with a destination to write the result to after it is called.
 	// This pointer should be to a boxed memory location.
-	fn new<F, R: Send>(f: F, dest: *mut JobResult<R>) -> Job where F: FnMut(Args) -> R {
+	fn new<F, R: Send>(f: F, dest: *mut JobResult<R>) -> Job where F: FnMut(&Worker) -> R {
 		assert!(mem::align_of::<CodeImpl<F,R>>() <= mem::align_of::<[u64; ARR_SIZE]>(), 
 			"Function alignment requirement is too high.");
 			
@@ -133,7 +130,7 @@ impl Job {
 	//   - captured data escaping its lifetime
 	//   - calling an invalid `Job` structure
 	// users of this method (me!) must be careful to avoid such cases. 
-	unsafe fn call(self, args: Args) {
+	unsafe fn call(self, args: &Worker) {
 		let t_obj = TraitObject {
 			data: &self.raw_data[0] as *const _ as *mut (),
 			vtable: self.vtable,
@@ -269,6 +266,15 @@ impl Queue {
 			}
 		}
 	}
+    
+    // get the number of jobs in the queue. Due to the multithreaded nature of 
+    // the queue, this is not guaranteed to be completely accurate.
+    fn len(&self) -> usize {
+        let top = self.top.load(Ordering::Relaxed);
+        let bottom = self.top.load(Ordering::Relaxed);
+        
+        ::std::cmp::min(top - bottom, 0) as usize
+    }
 	
 	// writes the pointer given to the slot specified.
 	#[inline(always)]
@@ -325,13 +331,13 @@ thread_local!(static JOB_POOL: Pool = Pool::new());
 enum ToWorker {
 	Start, // start
 	Clear, // run all jobs to completion, then reset the pool.
-	Shutdown, // shut down.
+	Shutdown, // all workers are clear and no jobs are running. safe to tear down pools.
 }
 
 // messages to the leader from workers.
 enum ToLeader {
-	Cleared,
-	Panicked(Box<Any>), // for propagating panics.
+	Cleared, // done clearing. will wait for start or shutdown
+	Panicked(Box<Any + Send>), // for propagating panics.
 }
 
 struct WorkerHandle {
@@ -344,28 +350,31 @@ struct WorkerHandle {
 /// work-stealing fork-join thread pool.
 pub struct JobSystem<A: Allocator> {
 	workers: Vector<WorkerHandle, A>,
-	local_worker: Worker<A>,
-}
-
-pub struct Worker<A: Allocator> {
 	queue: Arc<Queue>,
-	sibling_queues: Vector<Arc<Queue>, A>,
+    queue_list: Vector<Arc<Queue>, A>,
 }
 
-struct RecoverSafeParams<A: Allocator> {
+pub struct Worker {
+	queue: Arc<Queue>,
+	sibling_queues: *const [Arc<Queue>],
+}
+
+unsafe impl Send for Worker {}
+
+struct RecoverSafeParams {
 	send: Sender<ToLeader>,
 	recv: Receiver<ToWorker>,
-	worker: Worker<A>,
+	worker: Worker,
 }
 
-impl<A: Allocator + Send> panic::RecoverSafe for RecoverSafeParams<A> {}
+impl panic::RecoverSafe for RecoverSafeParams {}
 
-impl<'a, A: 'a + Allocator + Clone + Send> JobSystem<A> {
+impl<A: Allocator + Clone + Send> JobSystem<A> {
 	/// Creates a job system with `n` worker threads, not including
 	/// the local thread, backed by the given allocator.
 	pub fn new(n: usize, alloc: A) -> Self {
 		let mut queues = Vector::with_alloc_and_capacity(alloc.clone(), n + 1);
-		let mut workers = Vector::with_alloc_and_capacity(alloc.clone(), n + 1);
+		let mut workers = Vector::with_alloc_and_capacity(alloc, n + 1);
 		
 		// make queues
 		for _ in 0..(n+1) {
@@ -378,12 +387,11 @@ impl<'a, A: 'a + Allocator + Clone + Send> JobSystem<A> {
 			let (lead_send, lead_recv) = channel();
 			let worker = Worker {
 				queue: queues[i].clone(),
-				sibling_queues: queues.clone(), 	
+				sibling_queues: &queues[..] as *const _, 	
 			};
 			
-			// create a lifetime-bounded main function.
-			let main: Box<FnBox() + 'a> = Box::new(move || {
-				// recover from panics at the top level, so the thread local pool remains valid and no dangling pointers
+			let join_handle = thread::spawn(move || {
+                // recover from panics at the top level, so the thread local pool remains valid and no dangling pointers
 				// to jobs are kept until the main thread panics.
 				let outer_send = lead_send.clone();
 				
@@ -406,51 +414,166 @@ impl<'a, A: 'a + Allocator + Clone + Send> JobSystem<A> {
 				if let Err(panic) = maybe_panicked {
 					let _ = outer_send.send(ToLeader::Panicked(panic));
 					loop {
+                        // loop just in case we get unparked somehow.
 						thread::park();
 					}
 				}
-			});
-			
-			let static_main: Box<FnBox() + Send> = unsafe { mem::transmute(main) };
-			let join_handle = thread::spawn(static_main);
+            });
 			
 			workers.push(WorkerHandle {
 				send: work_send,
 				recv: lead_recv,
 				thread: join_handle,
 			});
-		}
-		
-		let local_worker = Worker {
-			queue: queues[0].clone(),
-			sibling_queues: queues.clone(),
-		};
+        }
+        
+        // tell every worker to start
+        for worker in &workers {
+            worker.send.send(ToWorker::Start).ok().expect("Worker hung up on job system");
+        }
 		
 		JobSystem {
 			workers: workers,
-			local_worker: local_worker,
+			queue: queues[0].clone(),
+            queue_list: queues,
 		}
 	}
 }
 
-impl<A: Allocator + Send> Worker<A> {
-	fn run_job(&self) {
-		// try to pop and steal if empty.
-	}
+impl<A: Allocator> Drop for JobSystem<A> {
+    fn drop(&mut self) {
+        // send every worker a clear message
+        for worker in &self.workers {
+            worker.send.send(ToWorker::Clear).ok().expect("Worker hung up on job system.");
+        }
+        
+        // wait for confirmation from each worker.
+        // the queues are not guaranteed to be empty until the last one responds!
+        for worker in &self.workers {
+            if let Ok(ToLeader::Cleared) = worker.recv.recv() {
+                continue;
+            } else {
+                panic!("Worker failed to clear queue.");
+            }
+        }
+        
+        // now tell every worker they can shut down safely.
+        for worker in &self.workers {
+            worker.send.send(ToWorker::Shutdown).ok().expect("Worker hung up on job system");
+        }
+    }
 }
 
-fn worker_main<A: Allocator>(send: Sender<ToLeader>, recv: Receiver<ToWorker>, worker: Worker<A>) {
-	match recv.recv().ok().expect("Channel to worker closed.") {
-		ToWorker::Start => {}
-		_ => panic!("Didn't receive start as first message."),
-	}
-	
-	loop {
-		
-	}
+impl Worker {
+    // try to pop a job or steal one from the queue with the most jobs.
+    fn get_job(&self) -> Option<*mut Job> {    
+        if let Some(job) = unsafe { self.queue.pop() } {
+            Some(job)
+        } else {
+            let (mut most_work, mut steal_idx) = (0, None);
+            let siblings = unsafe { &*self.sibling_queues };
+            for (idx, queue) in siblings.iter().enumerate() {
+                let len = queue.len();
+                if len > most_work { 
+                    most_work = len;
+                    steal_idx = Some(idx);
+                }
+            }
+            
+            if let Some(idx) = steal_idx {
+               siblings[idx].steal()
+            } else {
+                None
+            }
+        }
+    }
+    
+    // Do a sweep of each queue, including the worker's own, running jobs until it's complete.
+    // Since jobs can spawn new jobs, this is not necessarily an indication that all queues are now
+    // empty. If all queues are empty upon first inspection, this will return true. once all workers
+    // have observed this state, all jobs have finished.
+    fn clear_sweep(&self) -> bool {
+        let mut all_clear = true;
+        for queue in unsafe { &*self.sibling_queues } {
+            while let Some(job) = queue.steal() {
+                all_clear = false;
+                unsafe { (*job).call(self) }
+            }
+        }
+        
+        all_clear
+    }
+    
+    #[inline]
+    fn clear(&self) {
+        loop {
+            if self.clear_sweep() { break }
+        }
+    }
+}
+
+fn worker_main(send: Sender<ToLeader>, recv: Receiver<ToWorker>, worker: Worker) {
+    // Finite state machine for worker actions
+    #[derive(Clone, Copy)]
+    enum WorkerState {
+        Running, // running jobs normally. waiting for state change.
+        Paused, // paused, waiting for start or shutdown message.
+    }
+    
+	let mut state = WorkerState::Paused;
+    loop {
+        match state {
+            WorkerState::Running => {
+                // check for state change, otherwise run the next job
+                match recv.try_recv() {
+                    Err(TryRecvError::Disconnected) => panic!("job system hung up on worker"),
+                    Ok(msg) => match msg {
+                        ToWorker::Clear => {
+                            worker.clear();
+                            send.send(ToLeader::Cleared);
+                            state = WorkerState::Paused;
+                            continue;
+                        }
+                        
+                        _ => panic!("received unexpected message while running"),
+                    },
+                    
+                    _ => {}
+                }
+                
+                if let Some(job) = worker.get_job() {
+                    unsafe { (*job).call(&worker) }
+                }
+                
+                // FIXME: does it make sense to run this loop as fast as possible?
+                // should i yield a time slice to the os scheduler somehow?
+            }
+            
+            WorkerState::Paused => {
+                // wait for start or shutdown
+                match recv.recv().ok().expect("job system hung up on worker") {
+                    ToWorker::Start => { 
+                        state = WorkerState::Running; 
+                        continue;
+                    }
+                    ToWorker::Shutdown => break,
+                    _ => panic!("received unexpected message while paused"),
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-	use super::{Job, Queue};
+	use super::{JobSystem, Worker};
+    
+    use memory::DefaultAllocator;
+    
+    #[test]
+    fn creation_destruction() {
+        for i in 0..32 {
+            let _ = JobSystem::new(i, DefaultAllocator);
+        }
+    }
 }

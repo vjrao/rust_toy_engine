@@ -9,8 +9,8 @@
 
 pub mod component;
 mod entity;
+mod job_system;
 mod world;
-mod work_queue;
 
 pub use self::component::Component;
 pub use self::entity::{Entity, EntityManager};

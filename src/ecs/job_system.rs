@@ -3,14 +3,17 @@
 use memory::{Allocator, AllocBox};
 use memory::collections::Vector;
 
+use std::any::Any;
+use std::boxed::FnBox;
 use std::cell::{Cell, RefCell};
 use std::intrinsics;
 use std::mem;
+use std::panic;
 use std::ptr;
 use std::raw::TraitObject;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, fence, Ordering};
-use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 
 // Arguments that job functions take.
@@ -237,29 +240,32 @@ impl Queue {
 	}
 	
 	// Try to steal a job from the public end of the queue.
+	// this will loop either until it gets a job or the queue is empty.
 	fn steal(&self) -> Option<*mut Job> {
-		let top = self.top.load(Ordering::SeqCst);
-		
-		unsafe { intrinsics::atomic_singlethreadfence() }; // compiler memory barrier
-		
-		let bottom = self.bottom.load(Ordering::SeqCst);
-		
-		if bottom <= top {
-			// empty queue.
-			None
-		} else {
-			// non-empty queue.
-			// we may be competing with concurrent pop or steal calls.
-			let idx = wraparound_index(top);
-			let j: *mut Job = self.buf[idx];
+		loop {
+			let top = self.top.load(Ordering::SeqCst);
 			
-			if self.top.compare_and_swap(top, top + 1, Ordering::SeqCst) != top {
-				// lost a race.
-				None
+			unsafe { intrinsics::atomic_singlethreadfence() }; // compiler memory barrier
+			
+			let bottom = self.bottom.load(Ordering::SeqCst);
+			
+			if bottom <= top {
+				// empty queue.
+				return None
 			} else {
-				// won a race. store null in the job slot again.
-				unsafe { self.write_job(idx, ptr::null_mut()) }
-				Some(j)
+				// non-empty queue.
+				// we may be competing with concurrent pop or steal calls.
+				let idx = wraparound_index(top);
+				let j: *mut Job = self.buf[idx];
+				
+				if self.top.compare_and_swap(top, top + 1, Ordering::SeqCst) != top {
+					// lost a race.
+					continue;
+				} else {
+					// won a race. store null in the job slot again.
+					unsafe { self.write_job(idx, ptr::null_mut()) }
+					return Some(j)
+				}
 			}
 		}
 	}
@@ -315,38 +321,136 @@ impl Pool {
 
 thread_local!(static JOB_POOL: Pool = Pool::new());
 
+// messages to workers.
+enum ToWorker {
+	Start, // start
+	Clear, // run all jobs to completion, then reset the pool.
+	Shutdown, // shut down.
+}
+
+// messages to the leader from workers.
+enum ToLeader {
+	Cleared,
+	Panicked(Box<Any>), // for propagating panics.
+}
+
+struct WorkerHandle {
+	send: Sender<ToWorker>,
+	recv: Receiver<ToLeader>,
+	thread: thread::JoinHandle<()>,
+}
+
+/// The job system manages worker threads in a 
+/// work-stealing fork-join thread pool.
+pub struct JobSystem<A: Allocator> {
+	workers: Vector<WorkerHandle, A>,
+	local_worker: Worker<A>,
+}
+
+pub struct Worker<A: Allocator> {
+	queue: Arc<Queue>,
+	sibling_queues: Vector<Arc<Queue>, A>,
+}
+
+struct RecoverSafeParams<A: Allocator> {
+	send: Sender<ToLeader>,
+	recv: Receiver<ToWorker>,
+	worker: Worker<A>,
+}
+
+impl<A: Allocator + Send> panic::RecoverSafe for RecoverSafeParams<A> {}
+
+impl<'a, A: 'a + Allocator + Clone + Send> JobSystem<A> {
+	/// Creates a job system with `n` worker threads, not including
+	/// the local thread, backed by the given allocator.
+	pub fn new(n: usize, alloc: A) -> Self {
+		let mut queues = Vector::with_alloc_and_capacity(alloc.clone(), n + 1);
+		let mut workers = Vector::with_alloc_and_capacity(alloc.clone(), n + 1);
+		
+		// make queues
+		for _ in 0..(n+1) {
+			queues.push(Arc::new(Queue::new()));
+		}
+		
+		// spawn workers.
+		for i in 1..(n+1) {
+			let (work_send, work_recv) = channel();
+			let (lead_send, lead_recv) = channel();
+			let worker = Worker {
+				queue: queues[i].clone(),
+				sibling_queues: queues.clone(), 	
+			};
+			
+			// create a lifetime-bounded main function.
+			let main: Box<FnBox() + 'a> = Box::new(move || {
+				// recover from panics at the top level, so the thread local pool remains valid and no dangling pointers
+				// to jobs are kept until the main thread panics.
+				let outer_send = lead_send.clone();
+				
+				// no invariants will be broken when a worker goes down early.
+				// the queues are all atomically reference counted, so they won't be destructed.
+				// the job pool will be kept alive, so there are no dangling pointers in other queues.
+				let params = RecoverSafeParams {
+					send: lead_send,
+					recv: work_recv,
+					worker: worker,
+				};
+				
+				let maybe_panicked = panic::recover(move || {
+					let RecoverSafeParams { send: send, recv: recv, worker: worker } = params;
+					worker_main(send, recv, worker);
+				});
+				
+				// propagate panics up and spin until we get shut down.
+				// we spin to keep the thread local pool alive.
+				if let Err(panic) = maybe_panicked {
+					let _ = outer_send.send(ToLeader::Panicked(panic));
+					loop {
+						thread::park();
+					}
+				}
+			});
+			
+			let static_main: Box<FnBox() + Send> = unsafe { mem::transmute(main) };
+			let join_handle = thread::spawn(static_main);
+			
+			workers.push(WorkerHandle {
+				send: work_send,
+				recv: lead_recv,
+				thread: join_handle,
+			});
+		}
+		
+		let local_worker = Worker {
+			queue: queues[0].clone(),
+			sibling_queues: queues.clone(),
+		};
+		
+		JobSystem {
+			workers: workers,
+			local_worker: local_worker,
+		}
+	}
+}
+
+impl<A: Allocator + Send> Worker<A> {
+	fn run_job(&self) {
+		// try to pop and steal if empty.
+	}
+}
+
+fn worker_main<A: Allocator>(send: Sender<ToLeader>, recv: Receiver<ToWorker>, worker: Worker<A>) {
+	match recv.recv().ok().expect("Channel to worker closed.") {
+		ToWorker::Start => {}
+		_ => panic!("Didn't receive start as first message."),
+	}
+	
+	loop {
+		
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::{Job, Queue};
-	
-	#[test]
-	fn job_basics() {
-		let mut i = 0;
-		{
-			let j = Job::new(|| i += 1);
-			unsafe { j.call(()) };
-		}
-		assert_eq!(i, 1);
-	}
-	
-	#[test]
-	fn queue_basics() {
-		let mut i = 0;
-		{
-			let queue = Queue::new();
-			for _ in 0..5 {
-				unsafe { queue.push(Job::new(|| i += 1)); }
-			}
-			
-			// no way these should fail. unlike rob
-			unsafe { queue.pop().unwrap().call(()); }
-			for _ in 0..4 {
-				unsafe { queue.steal().unwrap().call(()); }
-			}
-			
-			unsafe { assert!(queue.pop().is_none()); }
-			assert!(queue.steal().is_none());
-		}
-		assert_eq!(i, 5);
-	}
 }

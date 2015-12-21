@@ -3,18 +3,13 @@
 use memory::{Allocator, AllocBox};
 use memory::collections::Vector;
 
-use self::job::{Job, JOB_POOL, Queue};
+use self::job::{Job, JOB_POOL, Pool, Queue};
 
 use std::any::Any;
 use std::boxed::FnBox;
-use std::cell::{Cell, RefCell};
-use std::intrinsics;
-use std::mem;
+use std::io::Error;
 use std::panic;
-use std::ptr;
-use std::raw::TraitObject;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, fence, Ordering};
+use std::sync::Arc;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
 
@@ -65,7 +60,9 @@ impl panic::RecoverSafe for RecoverSafeParams {}
 impl<A: Allocator + Clone + Send> JobSystem<A> {
 	/// Creates a job system with `n` worker threads, not including
 	/// the local thread, backed by the given allocator.
-	pub fn new(n: usize, alloc: A) -> Self {
+	pub fn new(n: usize, alloc: A) -> Result<Self, Error> {
+        use std::mem;
+        
 		let mut queues = Vector::with_alloc_and_capacity(alloc.clone(), n + 1);
 		let mut workers = Vector::with_alloc_and_capacity(alloc, n + 1);
 		
@@ -82,8 +79,11 @@ impl<A: Allocator + Clone + Send> JobSystem<A> {
 				queue: queues[i].clone(),
 				sibling_queues: &queues[..] as *const _, 	
 			};
-			
-			let join_handle = thread::spawn(move || {
+            
+            // give each thread enough stack for a pool
+			let builder = thread::Builder::new()
+                .name(format!("worker_{}", i));
+			let thread_result = builder.spawn(move || {
                 // recover from panics at the top level, so the thread local pool remains valid and no dangling pointers
 				// to jobs are kept until the main thread panics.
 				let outer_send = lead_send.clone();
@@ -98,7 +98,7 @@ impl<A: Allocator + Clone + Send> JobSystem<A> {
 				};
 				
 				let maybe_panicked = panic::recover(move || {
-					let RecoverSafeParams { send: send, recv: recv, worker: worker } = params;
+					let RecoverSafeParams { send, recv, worker } = params;
 					worker_main(send, recv, worker);
 				});
 				
@@ -112,6 +112,11 @@ impl<A: Allocator + Clone + Send> JobSystem<A> {
 					}
 				}
             });
+            
+            let join_handle = match thread_result {
+                Ok(handle) => handle,
+                Err(err) => return Err(err),
+            };
 			
 			workers.push(WorkerHandle {
 				send: work_send,
@@ -125,11 +130,11 @@ impl<A: Allocator + Clone + Send> JobSystem<A> {
             worker.send.send(ToWorker::Start).ok().expect("Worker hung up on job system");
         }
 		
-		JobSystem {
+		Ok(JobSystem {
 			workers: workers,
 			queue: queues[0].clone(),
             queue_list: queues,
-		}
+		})
 	}
 }
 
@@ -223,6 +228,7 @@ fn worker_main(send: Sender<ToLeader>, recv: Receiver<ToWorker>, worker: Worker)
                     Ok(msg) => match msg {
                         ToWorker::Clear => {
                             worker.clear();
+                            JOB_POOL.with(|pool| pool.reset());
                             send.send(ToLeader::Cleared);
                             state = WorkerState::Paused;
                             continue;
@@ -266,7 +272,7 @@ mod tests {
     #[test]
     fn creation_destruction() {
         for i in 0..32 {
-            let _ = JobSystem::new(i, DefaultAllocator);
+            let _ = JobSystem::new(i, DefaultAllocator).unwrap();
         }
     }
 }

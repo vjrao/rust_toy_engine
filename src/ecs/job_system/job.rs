@@ -1,15 +1,13 @@
+use memory::{AllocBox, Vector};
+
 use std::any::Any;
 use std::boxed::FnBox;
 use std::cell::{Cell, RefCell};
 use std::intrinsics;
 use std::mem;
-use std::panic;
 use std::ptr;
 use std::raw::TraitObject;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, fence, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::thread;
 
 use super::Worker;
 
@@ -289,20 +287,22 @@ unsafe impl Sync for Queue {}
 
 // A thread local pool allocator for jobs.
 pub struct Pool {
-	buf: [Job; MAX_JOBS],
+	buf: AllocBox<[Job]>,
 	cur: Cell<usize>,
 	last_reset: Cell<usize>,
 }
 
 impl Pool {
-	fn new() -> Self {
-		unsafe {
-			Pool {
-				buf: [mem::uninitialized(); MAX_JOBS],
-				cur: Cell::new(0),
-				last_reset: Cell::new(0),
-			}
-		}
+	fn new() -> Self {        
+        let buf = unsafe {
+            (0..MAX_JOBS).map(|_| mem::uninitialized()).collect::<Vector<_>>().into_boxed_slice()
+        };
+        
+        Pool {
+            buf: buf,
+            cur: Cell::new(0),
+            last_reset: Cell::new(0),
+        }
 	}
 	
 	// push a job onto the end of the pool and get a pointer to it.

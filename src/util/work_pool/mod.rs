@@ -290,8 +290,39 @@ impl WorkPool {
     }
     
     /// Create a new spawning scope for submitting jobs.
+    /// Any jobs submitted in this scope will be completed
+    /// by the end of this function call.
     pub fn scope<'pool, 'new, F>(&'pool mut self, f: F)
     where F: FnOnce(&Spawner<'pool, 'new>) {
+        self.spin_up();
+        self.local_worker.scope(f);
+    }
+    
+    /// Execute a job which strictly owns its contents.
+    /// The execution of this function may be deferred to beyond
+    /// this function call.
+    /// In the general case, it is safe to submit jobs which only
+    /// strictly outlive the pool. However, there is always the
+    /// chance that the pool could be leaked, violating the invariant
+    /// that the job is completed before the borrow of the data is.
+    pub fn execute<'a, F>(&'a mut self, f: F) 
+    where F: 'static + Send + FnOnce(&Spawner<'a, 'static>) {
+        use std::mem;
+        use std::ptr;
+        
+        self.spin_up();
+        // make a job without a counter.
+        unsafe { 
+                self.local_worker.submit_internal(ptr::null_mut(), move |worker| {
+                let spawner = make_spawner(&worker, ptr::null_mut());
+                f(&mem::transmute(spawner))          
+            })
+        }
+    }
+    
+    // spin up all the workers, in case they were in a paused
+    // state.
+    fn spin_up(&mut self) {
         if self.state != State::Running { 
             for worker in &self.workers {
                 worker.tx.send(ToWorker::Start).expect("Worker hung up on pool");
@@ -299,7 +330,6 @@ impl WorkPool {
             
             self.state = State::Running;
         }
-        self.local_worker.scope(f);
     }
     
     // clear all the workers and sets the state to paused.
@@ -399,5 +429,21 @@ mod tests {
             
             assert_eq!(v, (0..256).map(|_| 1).collect::<Vec<_>>())
         }); // any other jobs would be forcibly joined here.
+    }
+    
+    #[test]
+    fn multiple_synchronizations() {
+        let mut pool = WorkPool::new(4).unwrap();
+    }
+    
+    #[test]
+    fn outlives_pool() {
+        let mut v = vec![0; 256];
+        let mut pool = WorkPool::new(4).unwrap();
+        
+        // can only execute 'static functions here -- otherwise,
+        // some person might make the dumb mistake of dropping the
+        // pool before it has the chance to run all submitted jobs.
+        pool.execute(move |_| for i in &mut v { *i += 1} );
     }
 }

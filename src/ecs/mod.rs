@@ -10,7 +10,6 @@
 
 pub mod component;
 mod entity;
-mod work_pool;
 mod world;
 
 pub use self::component::Component;

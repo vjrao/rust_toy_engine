@@ -20,6 +20,7 @@
 
 pub mod ecs;
 pub mod memory;
+mod util;
 
 extern crate alloc;
 extern crate core;

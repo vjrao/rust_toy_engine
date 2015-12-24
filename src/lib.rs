@@ -12,8 +12,6 @@
 	nonzero,
 	num_bits_bytes,
 	raw,
-	recover,
-	std_panic,
 	unboxed_closures,
 	unique,
 	unsafe_no_drop_flag,

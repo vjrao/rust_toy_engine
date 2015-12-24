@@ -55,6 +55,7 @@ impl Queue {
         }
     }
     
+    // steal a job from the public end of the queue.
     pub fn steal(&self) -> Option<*mut Job> {
         let buf = self.buf.lock().unwrap();
         
@@ -70,6 +71,7 @@ impl Queue {
         }
     }
     
+    // get the length of this queue.
     pub fn len(&self) -> usize {
         // lock the buffer so we can access the inner variables here.
         let _buf = self.buf.lock().unwrap();
@@ -78,5 +80,15 @@ impl Queue {
         let t = self.top.get();
         
         b - t
+    }
+    
+    // reset the counters, so they don't wrap around.
+    pub fn reset_counters(&self) {
+        debug_assert_eq!(self.len(), 0);
+        
+        let _buf = self.buf.lock().unwrap();
+        
+        self.bottom.set(0);
+        self.top.set(0);
     }
 }

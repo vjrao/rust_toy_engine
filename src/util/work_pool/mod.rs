@@ -1,5 +1,6 @@
 //! A work-stealing fork-join queue used by the ECS to perform processors' work asynchronously.
 //! This is intended to be short-lived. Long running asynchronous tasks should use another method.
+//! For infinite loops, the longest-running of tasks, behavior will be as expected.
 use memory::{Allocator, AllocBox, Vector};
 
 mod job;
@@ -36,7 +37,7 @@ enum ToLeader {
 struct WorkerHandle {
 	tx: Sender<ToWorker>,
 	rx: Receiver<ToLeader>,
-	thread: thread::JoinHandle<()>,
+	thread: Option<thread::JoinHandle<()>>,
 }
 
 // Finite state machine for controlling workers.
@@ -264,7 +265,7 @@ impl WorkPool {
             workers.push(WorkerHandle {
                 tx: work_send,
                 rx: lead_recv,
-                thread: handle,
+                thread: Some(handle),
             });
         }
         
@@ -361,11 +362,11 @@ impl WorkPool {
             }
         }
         
-        // in debug mode, make sure the queues really are all empty.
-        if cfg!(debug_assertions) {
-            for queue in self.local_worker.queues.iter() {
-                assert!(queue.len() == 0, "Queues not cleared properly.");
-            }
+        // reset the counters in every queue so there's no chance of
+        // overlap.
+        for queue in self.local_worker.queues.iter() {
+            // asserts that len == 0 in debug mode.
+            queue.reset_counters();
         }
         
         // cleared and panicked workers are waiting for a shutdown message.
@@ -387,6 +388,11 @@ impl Drop for WorkPool {
         // now tell every worker they can shut down safely.
         for worker in &self.workers {
             worker.tx.send(ToWorker::Shutdown).ok().expect("Worker hung up on job system");
+        }
+        
+        // join the threads (although they should already be at this point).
+        for worker in &mut self.workers {
+            worker.thread.take().map(|handle| handle.join());
         }
     }
 }
@@ -434,6 +440,9 @@ mod tests {
     #[test]
     fn multiple_synchronizations() {
         let mut pool = WorkPool::new(4).unwrap();
+        for i in 0..100 {
+            pool.synchronize();
+        }
     }
     
     #[test]

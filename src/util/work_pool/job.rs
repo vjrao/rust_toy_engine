@@ -1,10 +1,6 @@
-use memory::{AllocBox, Vector};
-
-use std::intrinsics;
 use std::mem;
 use std::ptr;
-use std::raw::TraitObject;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::Worker;
 
@@ -32,6 +28,13 @@ impl<F> Code for CodeImpl<F> where F: Send + FnOnce(&Worker) {
             (*self.counter).fetch_sub(1, Ordering::Relaxed);
         }
 	}
+}
+
+// stub implementation of TraitObject
+#[repr(C)]
+struct TraitObject {
+    data: *mut (),
+    vtable: *mut (),
 }
 
 // A job is some raw binary data at least the size of a cache line.

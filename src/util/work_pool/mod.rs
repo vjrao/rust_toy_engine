@@ -1,7 +1,7 @@
 //! A work-stealing fork-join queue used by the ECS to perform processors' work asynchronously.
 //! This is intended to be short-lived. Long running asynchronous tasks should use another method.
 //! For infinite loops, the longest-running of tasks, behavior will be as expected.
-use memory::{Allocator, AllocBox, Vector};
+use memory::{Allocator, Vector};
 
 mod job;
 mod queue;
@@ -11,12 +11,10 @@ use self::job::Job;
 use self::pool::Pool;
 use self::queue::Queue;
 
-use std::any::Any;
-use std::boxed::FnBox;
 use std::io::Error;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
@@ -399,7 +397,7 @@ impl Drop for WorkPool {
 
 #[cfg(test)]
 mod tests {
-	use super::{WorkPool, Worker};
+	use super::WorkPool;
     
     #[test]
     fn creation_destruction() {
@@ -440,7 +438,7 @@ mod tests {
     #[test]
     fn multiple_synchronizations() {
         let mut pool = WorkPool::new(4).unwrap();
-        for i in 0..100 {
+        for _ in 0..100 {
             pool.synchronize();
         }
     }

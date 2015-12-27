@@ -24,7 +24,6 @@ use std::mem;
 use std::ops::{Index, IndexMut};
 use std::ptr;
 use std::slice;
-use std::usize;
 
 use std::hash::{Hash, Hasher};
 use std::cmp;
@@ -33,7 +32,11 @@ use super::raw_vec::RawVec;
 
 const INITIAL_CAPACITY: usize = 7; // 2^3 - 1
 const MINIMUM_CAPACITY: usize = 1; // 2 - 1
-const MAXIMUM_ZST_CAPACITY: usize = 1 << (usize::BITS - 1); // Largest possible power of two
+
+#[cfg(target_pointer_width = "32")]
+const MAXIMUM_ZST_CAPACITY: usize = 1 << (32 - 1); // Largest possible power of two
+#[cfg(target_pointer_width = "64")]
+const MAXIMUM_ZST_CAPACITY: usize = 1 << (64 - 1); // Largest possible power of two
 
 /// `VecDeque` is a growable ring buffer, which can be used as a double-ended
 /// queue efficiently.

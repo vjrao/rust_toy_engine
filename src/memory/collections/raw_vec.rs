@@ -537,7 +537,7 @@ impl<T, A: Allocator> Drop for RawVec<T, A> {
 
 #[inline]
 fn alloc_guard(alloc_size: usize) {
-    if ::std::usize::BITS < 64 {
+    if cfg!(target_pointer_width = "32") {
         assert!(alloc_size <= ::core::isize::MAX as usize,
                 "capacity overflow");
     }

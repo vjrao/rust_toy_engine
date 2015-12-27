@@ -20,9 +20,9 @@ use super::{entity, Entity, EntityManager};
 use super::world::WorldAllocator;
 
 /// Components are arbitrary data associated with entities.
-pub trait Component: Any {}
+pub trait Component: Any + Send + Sync {}
 
-impl<T: Any> Component for T {}
+impl<T: Any + Send + Sync> Component for T {}
 
 /// Maps entities to component data. This must be supplied with an entity manager
 /// to be made usable. 

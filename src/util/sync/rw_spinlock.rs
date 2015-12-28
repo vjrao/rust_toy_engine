@@ -68,6 +68,7 @@ impl<T> RwSpinLock<T> {
                     counter: &self.readers,
                 };
                 
+                debug_assert_eq!(self.writers.load(Ordering::Acquire) & ACTIVE_FLAG, 0);
                 return 
                 if self.poison.load(Ordering::Relaxed) {
                     Err(PoisonError::new(g))
@@ -269,7 +270,7 @@ mod tests {
     }
     
     #[test]
-    fn test_rw_arc() {
+    fn test_rw_arc_basics() {
         let arc = Arc::new(RwSpinLock::new(0));
         let arc2 = arc.clone();
         let (tx, rx) = channel();

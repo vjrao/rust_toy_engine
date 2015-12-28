@@ -245,72 +245,28 @@ impl<C: Component, P: PhantomComponentMaps> PhantomComponentMaps for ListEntry<P
 	}
 }
 
-/// A list where each entry is a `ComponentMap` 
+/// A list where each entry is a `ComponentMap` with mutually exclusive
+/// access. 
 pub trait ComponentMaps {
-	/// Get a reference to the supplied component's map.
+	/// Get mutually exclusive access to the supplied component's map.
 	/// Panics if this list has no entry for `T`.
-	fn get<T: Component>(&self) -> &ComponentMap<T>;
-	
-	/// Get a mutable reference to the supplied component's map.
-	/// Panics if this list has no entry for `T`.
-	fn get_mut<T: Component>(&mut self) -> &mut ComponentMap<T>;
-}
-
-impl ComponentMaps for Empty {
-	fn get<T: Component>(&self) -> &ComponentMap<T> {
-		panic!("No component of given type");
-	}
-	
-	fn get_mut<T: Component>(&mut self) -> &mut ComponentMap<T> {
-		panic!("No component of given type");
-	}
-}
-
-impl<C: Component, P: ComponentMaps> ComponentMaps for ListEntry<ComponentMap<C>, P> {
-	fn get<T: Component>(&self) -> &ComponentMap<T> {
-		if TypeId::of::<T>() == TypeId::of::<C>() {
-			unsafe { 
-				mem::transmute::<&ComponentMap<C>, &ComponentMap<T>>(&self.val)
-			}
-		} else {
-			self.parent.get()
-		}
-	}
-	
-	fn get_mut<T: Component>(&mut self) -> &mut ComponentMap<T> {
-		if TypeId::of::<T>() == TypeId::of::<C>() {
-			unsafe { 
-				mem::transmute::<&mut ComponentMap<C>, &mut ComponentMap<T>>(&mut self.val)
-			}
-		} else {
-			self.parent.get_mut()
-		}
-	}
-}
-
-/// A list where every entry is wrapped in a mutex.
-pub trait MutexComponentMaps {
-	/// Lock the mutex for `T`.
-	/// Panics if this list has no entry for T.
 	fn lock<T: Component>(&self) -> MutexGuard<ComponentMap<T>>;
 }
 
-impl MutexComponentMaps for Empty {
+impl ComponentMaps for Empty {
 	fn lock<T: Component>(&self) -> MutexGuard<ComponentMap<T>> {
 		panic!("No component of given type");
 	}
 }
 
-impl<C: Component, P: MutexComponentMaps> MutexComponentMaps for ListEntry<Mutex<ComponentMap<C>>, P> {
+impl<C: Component, P: ComponentMaps> ComponentMaps for ListEntry<Mutex<ComponentMap<C>>, P> {
 	fn lock<T: Component>(&self) -> MutexGuard<ComponentMap<T>> {
 		if TypeId::of::<T>() == TypeId::of::<C>() {
-			let guard = match self.val.lock() {
-				Ok(g) => g,
-				Err(p) => p.into_inner(),
-			};
-			
-			unsafe {
-				mem::transmute(guard)
+			unsafe { 
+				mem::transmute::<
+                    MutexGuard<ComponentMap<C>>,
+                    MutexGuard<ComponentMap<T>>
+                >(self.val.lock().unwrap())
 			}
 		} else {
 			self.parent.lock()
@@ -331,66 +287,16 @@ impl IntoComponentMaps for Empty {
 	fn into_components(self) -> Self::Output { Empty }
 }
 
-impl<C: Component, P: IntoComponentMaps> IntoComponentMaps for ListEntry<Mutex<ComponentMap<C>>, P> {
-	type Output = ListEntry<ComponentMap<C>, <P as IntoComponentMaps>::Output>;
-	
-	fn into_components(self) -> Self::Output { 
-		let map = match self.val.into_inner() {
-			Ok(m) => m,
-			Err(p) => p.into_inner(),
-		};
-		
-		ListEntry {
-			val: map,
-			parent: self.parent.into_components(),
-		}
-	}
-}
-
 impl<C: Component, P> IntoComponentMaps for (ListEntry<PhantomData<C>, P>, WorldAllocator) 
 where (P, WorldAllocator): IntoComponentMaps {
-	type Output = ListEntry<ComponentMap<C>, <(P, WorldAllocator) as IntoComponentMaps>::Output>;
+	type Output = ListEntry<Mutex<ComponentMap<C>>, <(P, WorldAllocator) as IntoComponentMaps>::Output>;
 	
 	fn into_components(self) -> Self::Output {
 		ListEntry {
-			val: ComponentMap::new(self.1),
+			val: Mutex::new(ComponentMap::new(self.1)),
 			parent: (self.0.parent, self.1).into_components(),
 		}
 	}
-}
-
-/// Something which can be transformed into a type which implements `MutexComponentMaps`.
-pub trait IntoMutexComponentMaps {
-	type Output: MutexComponentMaps;
-	
-	fn into_mutex_components(self) -> Self::Output;
-}
-
-impl IntoMutexComponentMaps for Empty {
-	type Output = Empty;
-	
-	fn into_mutex_components(self) -> Self::Output { Empty }
-}
-
-impl<T: Component, P: IntoMutexComponentMaps> IntoMutexComponentMaps for ListEntry<ComponentMap<T>, P> {
-	type Output = ListEntry<Mutex<ComponentMap<T>>, <P as IntoMutexComponentMaps>::Output>;
-	
-	fn into_mutex_components(self) -> Self::Output {
-		ListEntry {
-			val: Mutex::new(self.val),
-			parent: self.parent.into_mutex_components(),
-		}
-	}
-}
-
-/// A type that can be roundtripped into a MutexComponentMaps and back again.
-pub trait RoundTrip: IntoMutexComponentMaps {
-    type Output: IntoComponentMaps;
-}
-
-impl<T: ComponentMaps + IntoMutexComponentMaps> RoundTrip for T where
-<T as IntoMutexComponentMaps>::Output: IntoComponentMaps<Output=T> {
-    type Output = <Self as IntoMutexComponentMaps>::Output;
 }
 
 

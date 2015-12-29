@@ -61,7 +61,6 @@ impl<T> Entry<T> {
 
 struct FullEntry<T> {
     data: T,
-    entity: Entity,
 }
 
 impl<T: Component> ComponentMap<T> {
@@ -74,6 +73,8 @@ impl<T: Component> ComponentMap<T> {
                 &Entry::Empty(ref next) => {
                     self.first_free = next.clone();
                 }
+                // nodes whose indices are in the freelist should
+                // really be empty
                 _ => unreachable!(),
             }
         } else {
@@ -136,7 +137,6 @@ impl<'a, T: 'a + Component> MapHandle<'a, T> {
         let entity_index = entity::index_of(e);
         let entry = Entry::Full(FullEntry {
             data: data,
-            entity: e,
         });
         
         if let Some(index) = self.map.indices[entity_index].clone() {
@@ -306,36 +306,4 @@ mod tests {
     use ecs::world::WorldAllocator;
     
     use super::{ComponentMap};
-    
-    #[test]
-    fn map_basics() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct Counter(usize);
-        
-        // world allocator has a test stub.
-        let alloc = Default::default();
-        
-        let mut em = EntityManager::new(alloc);
-        let mut map: ComponentMap<Counter> = ComponentMap::new(alloc);
-        
-        let first = em.next_entity();
-        let second = em.next_entity();
-        let third = em.next_entity();
-        em.destroy_entity(third);
-        
-        {
-            let mut handle = map.supply(&em);
-            handle.set(first, Counter(0));
-            // third is dead, set doesn't work.
-            handle.set(third, Counter(1));
-            
-            assert_eq!(handle.get(first), Some(&Counter(0)));
-            assert_eq!(handle.get(second), None);
-            assert_eq!(handle.get(third), None); // third entity is not alive.
-            
-            assert_eq!(handle.remove(first), Some(Counter(0)));
-            assert_eq!(handle.remove(second), None);
-            assert_eq!(handle.remove(third), None);
-        }
-    }
 }

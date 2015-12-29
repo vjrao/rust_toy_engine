@@ -15,9 +15,14 @@
 	unsize,
 )]
 
+#![cfg_attr(test, feature(test))]
+
 pub mod ecs;
 pub mod memory;
 mod util;
 
 extern crate alloc;
 extern crate core;
+
+#[cfg(test)]
+extern crate test;

@@ -35,7 +35,9 @@ pub struct Entity {
 impl Entity {
     fn new(index: usize, gen: u8) -> Entity {
         // if index > 2^INDEX_BITS, we're in trouble.
-        // TODO: add error handling.
+        // this is only really a problem on 32-bit systems,
+        // where some applications could feasibly have
+        // greater than 2^24 entities, however unlikely that is.
         assert!(index < (1 << INDEX_BITS));
         let id = (gen as usize).wrapping_shl(INDEX_BITS as u32) + index;
         Entity {
@@ -82,7 +84,7 @@ impl EntityManager {
     }
 
     /// Creates an entity.
-    pub fn next_entity(&mut self) -> Entity {
+    pub fn next_entity(&self) -> Entity {
         let mut generation = self.generation.write().unwrap();
         let mut unused = self.unused.borrow_mut();
        
@@ -93,7 +95,7 @@ impl EntityManager {
     /// If the slice is smaller than n, it only creates enough entities to fill the slice.
     ///
     /// Returns the number of entities created.
-    pub fn next_entities(&mut self, buf: &mut [Entity], n: usize) -> usize {
+    pub fn next_entities(&self, buf: &mut [Entity], n: usize) -> usize {
         let mut generation = self.generation.write().unwrap();
         let mut unused = self.unused.borrow_mut();
         let num = ::std::cmp::min(n, buf.len());
@@ -111,11 +113,20 @@ impl EntityManager {
     }
 
     /// Destroy an entity.
-    pub fn destroy_entity(&mut self, e: Entity) {
+    pub fn destroy_entity(&self, e: Entity) {
         let mut gen = self.generation.write().unwrap();
-        let idx = index_of(e);
-        gen[idx] += 1;
-        self.unused.borrow_mut().push_back(idx);
+        destroy_entity(&mut *gen, &mut *self.unused.borrow_mut(), e);
+    }
+    
+    /// Destroy all the entities in the slice.
+    pub fn destroy_entities(&self, entities: &[Entity]) {
+        let mut gen = self.generation.write().unwrap();
+        let mut unused = self.unused.borrow_mut();
+        
+        // defer to the helper so we only lock once.
+        for e in entities.iter() {
+            destroy_entity(&mut *gen, &mut *unused, *e);
+        }
     }
     
     /// Get an upper bound on the number of entities which could be live.
@@ -124,6 +135,7 @@ impl EntityManager {
     }
 }
 
+// utility functions for creating/destroying entities
 fn make_entity(gen: &mut GenVec, unused: &mut Unused, min_unused: usize) -> Entity {
     if unused.len() <= min_unused {
         gen.push(0);
@@ -133,4 +145,15 @@ fn make_entity(gen: &mut GenVec, unused: &mut Unused, min_unused: usize) -> Enti
         let idx = unused.pop_front().unwrap();
         Entity::new(idx, gen[idx])
     }
+}
+
+fn destroy_entity(gen: &mut GenVec, unused: &mut Unused, e: Entity) {
+    let idx = index_of(e);
+    
+    // outdated handles should have no effect on the entity in the
+    // same index as it.
+    if gen[idx] != generation_of(e) { return }
+    
+    gen[idx] += 1;
+    unused.push_back(idx);
 }

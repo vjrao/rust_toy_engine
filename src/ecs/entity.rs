@@ -2,8 +2,7 @@ use memory::collections::{VecDeque, Vector};
 
 use std::cell::RefCell;
 use std::slice;
-
-use util::sync::RwSpinLock;
+use std::sync::RwLock;
 
 use super::world::WorldAllocator;
 
@@ -60,7 +59,7 @@ type Unused = VecDeque<usize, WorldAllocator>;
 /// Manages the creation and destruction of entities.
 /// This is fully thread-safe.
 pub struct EntityManager {
-    generation: RwSpinLock<GenVec>,
+    generation: RwLock<GenVec>,
     unused: RefCell<Unused>,
     min_unused: usize,
 }
@@ -77,7 +76,7 @@ impl EntityManager {
     /// any are recycled.
     pub fn with_min_unused(alloc: WorldAllocator, min_unused: usize) -> Self {
         EntityManager {
-            generation: RwSpinLock::new(GenVec::with_alloc(alloc)),
+            generation: RwLock::new(GenVec::with_alloc(alloc)),
             unused: RefCell::new(Unused::with_alloc_and_capacity(alloc, min_unused + 1)),
             min_unused: min_unused,
         }

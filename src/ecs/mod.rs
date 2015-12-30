@@ -13,4 +13,5 @@ mod entity;
 mod world;
 
 pub use self::component::Component;
-pub use self::entity::{Entity, EntityManager};
+pub use self::entity::Entity;
+pub use self::world::World;

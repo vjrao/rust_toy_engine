@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Mutex, MutexGuard};
 
-use super::{entity, Entity, EntityManager};
+use super::entity::{self, Entity, EntityManager};
 use super::world::WorldAllocator;
 
 /// Components are arbitrary data associated with entities.
@@ -207,19 +207,29 @@ pub struct ListEntry<T: Any, P> {
 }
 
 /// Empty case of a list entry.
-pub struct Empty;
+// marker is so outsiders can't create one.
+pub struct Empty(PhantomData<()>);
+
+#[doc(hidden)]
+pub fn make_empty() -> Empty {
+    Empty(PhantomData)
+}
 
 /// A list of components where each entry is a zero-sized PhantomData.
 /// This is used to signify which components a world will manage, without yet constructing
 /// the maps themselves.
 pub trait PhantomComponentMaps {
+    type Components: ComponentMaps;
 	/// Push another component type onto this list. This additionally verifies
 	/// that no duplicates are pushed.
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> where Self: Sized;
 	fn has<T: Component>(&self) -> bool;
+    fn into_components(self, alloc: WorldAllocator) -> Self::Components;
 }
 
 impl PhantomComponentMaps for Empty {
+    type Components = Empty;
+    
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Empty> {
 		ListEntry {
 			val: PhantomData,
@@ -228,9 +238,12 @@ impl PhantomComponentMaps for Empty {
 	}
 	
 	fn has<T: Component>(&self) -> bool { false }
+    fn into_components(self, _: WorldAllocator) -> Empty { make_empty() }
 }
 
 impl<C: Component, P: PhantomComponentMaps> PhantomComponentMaps for ListEntry<PhantomData<C>, P> {
+    type Components = ListEntry<Mutex<ComponentMap<C>>, P::Components>;
+    
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> {
 		if self.has::<T>() { panic!("Added type to components list twice.") }
 		
@@ -243,6 +256,13 @@ impl<C: Component, P: PhantomComponentMaps> PhantomComponentMaps for ListEntry<P
 	fn has<T: Component>(&self) -> bool {
 		(TypeId::of::<T>() == TypeId::of::<C>()) || self.parent.has::<T>()
 	}
+    
+    fn into_components(self, alloc: WorldAllocator) -> Self::Components {
+        ListEntry {
+            val: Mutex::new(ComponentMap::new(alloc)),
+            parent: self.parent.into_components(alloc),
+        }
+    }
 }
 
 /// A list where each entry is a `ComponentMap` with mutually exclusive
@@ -274,36 +294,8 @@ impl<C: Component, P: ComponentMaps> ComponentMaps for ListEntry<Mutex<Component
 	}
 }
 
-/// Something that can be transformed into a type which implements `ComponentMaps`.
-pub trait IntoComponentMaps {
-	type Output: ComponentMaps;
-	
-	fn into_components(self) -> Self::Output;
-}
-
-impl IntoComponentMaps for Empty {
-	type Output = Empty;
-	
-	fn into_components(self) -> Self::Output { Empty }
-}
-
-impl<C: Component, P> IntoComponentMaps for (ListEntry<PhantomData<C>, P>, WorldAllocator) 
-where (P, WorldAllocator): IntoComponentMaps {
-	type Output = ListEntry<Mutex<ComponentMap<C>>, <(P, WorldAllocator) as IntoComponentMaps>::Output>;
-	
-	fn into_components(self) -> Self::Output {
-		ListEntry {
-			val: Mutex::new(ComponentMap::new(self.1)),
-			parent: (self.0.parent, self.1).into_components(),
-		}
-	}
-}
-
 
 #[cfg(test)]
-mod tests {
-    use ecs::EntityManager;
-    use ecs::world::WorldAllocator;
-    
+mod tests {    
     use super::{ComponentMap};
 }

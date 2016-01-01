@@ -153,6 +153,6 @@ fn destroy_entity(gen: &mut GenVec, unused: &mut Unused, e: Entity) {
     // same index as it.
     if gen[idx] != generation_of(e) { return }
     
-    gen[idx] += 1;
+    gen[idx].wrapping_add(1);
     unused.push_back(idx);
 }

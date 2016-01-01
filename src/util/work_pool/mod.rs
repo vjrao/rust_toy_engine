@@ -124,7 +124,7 @@ impl Worker {
         let s = make_spawner(self, &counter);
         f(&s);
         
-        while counter.load(Ordering::Relaxed) != 0 {
+        while counter.load(Ordering::Acquire) != 0 {
             self.run_next();    
         }
     }
@@ -152,7 +152,7 @@ impl<'pool, 'scope> Spawner<'pool, 'scope> {
             // increment the counter first just in case, somehow, this job
             // gets grabbed before we have a chance to increment it,
             // and we wait for all jobs to complete.
-            (*self.counter).fetch_add(1, Ordering::Relaxed);
+            (*self.counter).fetch_add(1, Ordering::AcqRel);
             self.worker.submit_internal(self.counter, move |worker| {
                 // make a new spawner associated with the same scope,
                 // but with the correct worker for the thread -- so if 

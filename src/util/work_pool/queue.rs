@@ -33,9 +33,9 @@ impl Queue {
         assert!(!job.is_null(), "Attempted to push null job onto queue");
         let mut buf = self.buf.lock().unwrap();
         
-        let b = self.bottom.get() + 1;
+        let b = self.bottom.get();
         buf[b & MASK] = job;
-        self.bottom.set(b);
+        self.bottom.set(b + 1);
     }
     
     // pop a job from the private end of the queue.
@@ -48,7 +48,7 @@ impl Queue {
         if b > t {
             // at least one job. decrement bottom
             self.bottom.set(b - 1);
-            Some(buf[b & MASK])
+            Some(buf[(b - 1) & MASK])
         } else {
             // no jobs.
             None

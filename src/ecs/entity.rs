@@ -7,45 +7,39 @@ use std::sync::RwLock;
 use super::world::WorldAllocator;
 
 // The number of bits in the id to use for the generation.
-const GEN_BITS: usize = 8;
-const GEN_MASK: usize = (1 << GEN_BITS) - 1;
-// The number of bits in the id to use for the index.
-// use usize::BITS when it becomes stable.
-#[cfg(target_pointer_width = "32")]
-const INDEX_BITS: usize = (32 - GEN_BITS);
-#[cfg(target_pointer_width = "64")]
-const INDEX_BITS: usize = (64 - GEN_BITS);
+const GEN_BITS: u32 = 8;
+const GEN_MASK: u32 = (1 << GEN_BITS) - 1;
 
-const INDEX_MASK: usize = (1 << INDEX_BITS) - 1;
+// it's enough to use 32 bit integers for all entities.
+// this is only really a problem on 32-bit systems,
+// where some applications could feasibly have
+// greater than 2^24 entities, however unlikely that is.
+const INDEX_BITS: u32 = (32 - GEN_BITS);
+const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
+
 // The default value for min_unused. 
-const DEFAULT_MIN_UNUSED: usize = 1024;
-
-// The amount of entities to iterate over before checking for writers.
-const ITERS_BEFORE_RELOCKING: usize = 128;
+const MIN_UNUSED: usize = 1024;
 
 /// An unique entity.
 /// Entities each have a unique id which serves
 /// as a weak pointer to the entity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Entity {
-    id: usize,
+    id: u32,
 }
 
 impl Entity {
-    fn new(index: usize, gen: u8) -> Entity {
+    fn new(index: u32, gen: u8) -> Entity {
         // if index > 2^INDEX_BITS, we're in trouble.
-        // this is only really a problem on 32-bit systems,
-        // where some applications could feasibly have
-        // greater than 2^24 entities, however unlikely that is.
         assert!(index < (1 << INDEX_BITS));
-        let id = (gen as usize).wrapping_shl(INDEX_BITS as u32) + index;
+        let id = (gen as u32).wrapping_shl(INDEX_BITS as u32) + index;
         Entity {
             id: id
         }
     }
 }
 
-pub fn index_of(e: Entity) -> usize {
+pub fn index_of(e: Entity) -> u32 {
     e.id & INDEX_MASK
 }
 
@@ -54,105 +48,76 @@ pub fn generation_of(e: Entity) -> u8 {
 }
 
 type GenVec = Vector<u8, WorldAllocator>;
-type Unused = VecDeque<usize, WorldAllocator>;
+type Unused = VecDeque<u32, WorldAllocator>;
 
 /// Manages the creation and destruction of entities.
 /// This is fully thread-safe.
 pub struct EntityManager {
-    generation: RwLock<GenVec>,
-    unused: RefCell<Unused>,
+    generation: GenVec,
+    unused: Unused,
     min_unused: usize,
 }
 
 impl EntityManager {
     /// Create a new entity manager.
-    #[inline]
     pub fn new(alloc: WorldAllocator) -> Self {
-        EntityManager::with_min_unused(alloc, DEFAULT_MIN_UNUSED)
-    }
-
-    /// Creates a new entity manager which forces
-    /// there to be `min_unused` dead entities before
-    /// any are recycled.
-    pub fn with_min_unused(alloc: WorldAllocator, min_unused: usize) -> Self {
         EntityManager {
-            generation: RwLock::new(GenVec::with_alloc(alloc)),
-            unused: RefCell::new(Unused::with_alloc_and_capacity(alloc, min_unused + 1)),
+            generation: GenVec::with_alloc(alloc),
+            unused: Unused::with_alloc_and_capacity(alloc, DEFAULT_MIN_UNUSED + 1),
             min_unused: min_unused,
         }
     }
-
+    
     /// Creates an entity.
-    pub fn next_entity(&self) -> Entity {
-        let mut generation = self.generation.write().unwrap();
-        let mut unused = self.unused.borrow_mut();
-       
-        make_entity(&mut *generation, &mut *unused, self.min_unused)
+    pub fn next_entity(&mut self) -> Entity {
+        if self.unused.len() <= min_unused {
+            self.generation.push(0);
+            let idx = generation.len() - 1;
+            Entity::new(idx, 0)
+        } else {
+            let idx = self.unused.pop_front().unwrap();
+            Entity::new(idx, gen[idx])
+        }
     }
 
     /// Creates n entities and puts them into the slice given.
     /// If the slice is smaller than n, it only creates enough entities to fill the slice.
     ///
     /// Returns the number of entities created.
-    pub fn next_entities(&self, buf: &mut [Entity], n: usize) -> usize {
-        let mut generation = self.generation.write().unwrap();
-        let mut unused = self.unused.borrow_mut();
+    pub fn next_entities(&mut self, buf: &mut [Entity], n: usize) -> usize {
         let num = ::std::cmp::min(n, buf.len());
         
         for i in 0..num {
-            buf[i] = make_entity(&mut *generation, &mut *unused, self.min_unused);
+            buf[i] = self.next_entity();
         }
         
         num
     }
 
     /// Whether an entity is currently "alive", or exists.
+    #[inline]
     pub fn is_alive(&self, e: Entity) -> bool {
-        self.generation.read().unwrap()[index_of(e)] == generation_of(e)
+        self.generation.read().unwrap()[index_of(e) as usize] == generation_of(e)
     }
 
     /// Destroy an entity.
-    pub fn destroy_entity(&self, e: Entity) {
-        let mut gen = self.generation.write().unwrap();
-        destroy_entity(&mut *gen, &mut *self.unused.borrow_mut(), e);
+    pub fn destroy_entity(&mut self, e: Entity) {
+        if !self.is_alive(e) { return }
+        
+        let idx = index_of(e);
+        gen[idx as usize].wrapping_add(1);
+        unused.push_back(idx);
     }
     
     /// Destroy all the entities in the slice.
     pub fn destroy_entities(&self, entities: &[Entity]) {
-        let mut gen = self.generation.write().unwrap();
-        let mut unused = self.unused.borrow_mut();
-        
-        // defer to the helper so we only lock once.
-        for e in entities.iter() {
-            destroy_entity(&mut *gen, &mut *unused, *e);
+        for e in entities {
+            self.destroy_entity(e);
         }
     }
     
     /// Get an upper bound on the number of entities which could be live.
     pub fn size_hint(&self) -> usize {
-        self.generation.read().unwrap().len()
+        self.generation.len()
     }
-}
-
-// utility functions for creating/destroying entities
-fn make_entity(gen: &mut GenVec, unused: &mut Unused, min_unused: usize) -> Entity {
-    if unused.len() <= min_unused {
-        gen.push(0);
-        let idx = gen.len() - 1;
-        Entity::new(idx, 0)
-    } else {
-        let idx = unused.pop_front().unwrap();
-        Entity::new(idx, gen[idx])
-    }
-}
-
-fn destroy_entity(gen: &mut GenVec, unused: &mut Unused, e: Entity) {
-    let idx = index_of(e);
-    
-    // outdated handles should have no effect on the entity in the
-    // same index as it.
-    if gen[idx] != generation_of(e) { return }
-    
-    gen[idx].wrapping_add(1);
-    unused.push_back(idx);
 }

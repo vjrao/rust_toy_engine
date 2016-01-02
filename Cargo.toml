@@ -2,3 +2,6 @@
 name = "engine"
 version = "0.1.1"
 authors = ["rphmeier <rphmeier@gmail.com>"]
+
+[dependencies]
+rand = "0.3"

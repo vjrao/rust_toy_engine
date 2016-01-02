@@ -18,6 +18,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
+use rand::distributions::{IndependentSample, Range};
+
 const MAX_JOBS: usize = 4096;
 
 // messages to workers.
@@ -60,16 +62,10 @@ impl Worker {
             return Some(job);
         }
         
-        let (mut most_work, mut most_idx) = (0, None);
-        for (idx, queue) in self.queues.iter().enumerate() {
-            let work = queue.len();
-            if work > most_work && idx != self.idx {
-                most_work = work;
-                most_idx = Some(idx);
-            }
-        }
-      
-        if let Some(idx) = most_idx {
+        let mut rng = ::rand::thread_rng();
+        let idx = Range::new(0, self.queues.len()).ind_sample(&mut rng);
+        
+        if idx != self.idx {
             self.queues[idx].steal()
         } else {
             None

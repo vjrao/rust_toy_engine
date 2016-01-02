@@ -18,8 +18,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-use rand::distributions::{IndependentSample, Range};
-
 const MAX_JOBS: usize = 4096;
 
 // messages to workers.
@@ -62,10 +60,16 @@ impl Worker {
             return Some(job);
         }
         
-        let mut rng = ::rand::thread_rng();
-        let idx = Range::new(0, self.queues.len()).ind_sample(&mut rng);
+        let (mut most_work, mut most_idx) = (0, None);
+        for (i, queue) in self.queues.iter().enumerate() {
+            let len = queue.len();
+            if len > most_work {
+                most_work = len;
+                most_idx = Some(i);
+            }
+        }
         
-        if idx != self.idx {
+        if let Some(idx) = most_idx {
             self.queues[idx].steal()
         } else {
             None
@@ -144,18 +148,24 @@ impl<'pool, 'scope> Spawner<'pool, 'scope> {
     where F: 'scope + Send + FnOnce(&Spawner<'pool, 'scope>) {
         use std::mem;
         
+        // for sending the counter pointer across thread boundaries.
+        struct SendCounter(*const AtomicUsize);
+        unsafe impl Send for SendCounter {}
+        
         unsafe { 
             // increment the counter first just in case, somehow, this job
             // gets grabbed before we have a chance to increment it,
             // and we wait for all jobs to complete.
+            let counter: SendCounter = SendCounter(self.counter);
             (*self.counter).fetch_add(1, Ordering::AcqRel);
             self.worker.submit_internal(self.counter, move |worker| {
+                let SendCounter(count_ptr) = counter;
                 // make a new spawner associated with the same scope,
                 // but with the correct worker for the thread -- so if 
                 // this job spawns any children, we won't break any 
                 // invariants by accessing other workers' queues/pools
                 // in unexpected ways.
-                let spawner = make_spawner(worker, self.counter);
+                let spawner = make_spawner(worker, count_ptr);
                 f(&mem::transmute(spawner) )
             });
         }
@@ -394,7 +404,6 @@ impl Drop for WorkPool {
 #[cfg(test)]
 mod tests {
 	use super::WorkPool;
-    use test::Bencher;
     
     #[test]
     fn creation_destruction() {
@@ -449,59 +458,5 @@ mod tests {
         // some person might make the dumb mistake of dropping the
         // pool before it has the chance to run all submitted jobs.
         pool.execute(move |_| for i in &mut v { *i += 1} );
-    }
-    
-    #[bench]
-    fn increment_2mb_sequential(b: &mut Bencher) {
-        let mut v = vec![0u16; 1 << 19];
-        b.iter(|| {
-            for x in &mut v { *x += 1 }
-        });
-    }
-    
-    fn increment_2mb_pool_n(b: &mut Bencher, n: usize) {
-        let mut v = vec![0u16; 1 << 19];
-        let mut pool = WorkPool::new(n).unwrap();
-        
-        b.iter(|| {
-           pool.scope(|spawner| {
-               for chunk in v.chunks_mut(4096) {
-                   spawner.execute(|_| {
-                      for x in chunk { *x += 1 } 
-                   });
-               }
-           }); 
-           pool.synchronize();
-        });
-    }
-    
-    #[bench]
-    fn increment_2mb_pool_0(b: &mut Bencher) {
-        increment_2mb_pool_n(b, 0);
-    }
-    
-    #[bench]
-    fn increment_2mb_pool_1(b: &mut Bencher) {
-        increment_2mb_pool_n(b, 1);
-    }
-    
-    #[bench]
-    fn increment_2mb_pool_2(b: &mut Bencher) {
-        increment_2mb_pool_n(b, 2);
-    }
-    
-    #[bench]
-    fn increment_2mb_pool_4(b: &mut Bencher) {
-        increment_2mb_pool_n(b, 4);
-    }
-    
-    #[bench]
-    fn increment_2mb_pool_6(b: &mut Bencher) {
-        increment_2mb_pool_n(b, 6);
-    }
-    
-    #[bench]
-    fn increment_2mb_pool_8(b: &mut Bencher) {
-        increment_2mb_pool_n(b, 8);
     }
 }

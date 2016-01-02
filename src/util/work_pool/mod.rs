@@ -126,7 +126,7 @@ impl Worker {
         
         while counter.load(Ordering::Acquire) != 0 {
             self.run_next();    
-        }
+        }        
     }
 }
 
@@ -398,6 +398,7 @@ impl Drop for WorkPool {
 #[cfg(test)]
 mod tests {
 	use super::WorkPool;
+    use test::Bencher;
     
     #[test]
     fn creation_destruction() {
@@ -452,5 +453,59 @@ mod tests {
         // some person might make the dumb mistake of dropping the
         // pool before it has the chance to run all submitted jobs.
         pool.execute(move |_| for i in &mut v { *i += 1} );
+    }
+    
+    #[bench]
+    fn increment_2mb_sequential(b: &mut Bencher) {
+        let mut v = vec![0u16; 1 << 19];
+        b.iter(|| {
+            for x in &mut v { *x += 1 }
+        });
+    }
+    
+    fn increment_2mb_pool_n(b: &mut Bencher, n: usize) {
+        let mut v = vec![0u16; 1 << 19];
+        let mut pool = WorkPool::new(n).unwrap();
+        
+        b.iter(|| {
+           pool.scope(|spawner| {
+               for chunk in v.chunks_mut(4096) {
+                   spawner.execute(|_| {
+                      for x in chunk { *x += 1 } 
+                   });
+               }
+           }); 
+           pool.synchronize();
+        });
+    }
+    
+    #[bench]
+    fn increment_2mb_pool_0(b: &mut Bencher) {
+        increment_2mb_pool_n(b, 0);
+    }
+    
+    #[bench]
+    fn increment_2mb_pool_1(b: &mut Bencher) {
+        increment_2mb_pool_n(b, 1);
+    }
+    
+    #[bench]
+    fn increment_2mb_pool_2(b: &mut Bencher) {
+        increment_2mb_pool_n(b, 2);
+    }
+    
+    #[bench]
+    fn increment_2mb_pool_4(b: &mut Bencher) {
+        increment_2mb_pool_n(b, 4);
+    }
+    
+    #[bench]
+    fn increment_2mb_pool_6(b: &mut Bencher) {
+        increment_2mb_pool_n(b, 6);
+    }
+    
+    #[bench]
+    fn increment_2mb_pool_8(b: &mut Bencher) {
+        increment_2mb_pool_n(b, 8);
     }
 }

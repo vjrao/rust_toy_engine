@@ -404,7 +404,6 @@ impl Drop for WorkPool {
 #[cfg(test)]
 mod tests {
 	use super::WorkPool;
-    use test::Bencher;
     
     #[test]
     fn creation_destruction() {

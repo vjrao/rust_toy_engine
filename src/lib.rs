@@ -23,7 +23,6 @@ mod util;
 
 extern crate alloc;
 extern crate core;
-extern crate rand;
 
 #[cfg(test)]
 extern crate test;

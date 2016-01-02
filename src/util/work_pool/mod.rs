@@ -403,7 +403,7 @@ impl Drop for WorkPool {
 
 #[cfg(test)]
 mod tests {
-	use super::{WorkPool, Spawner};
+	use super::WorkPool;
     use test::Bencher;
     
     #[test]

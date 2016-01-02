@@ -47,6 +47,7 @@ impl Queue {
         let b = self.bottom.load(Ordering::Acquire);        
         (*self.buf.get())[b & MASK] = job;
         
+<<<<<<< HEAD
         compiler_barrier!();
         self.bottom.store(b + 1, Ordering::Release);
     }
@@ -73,6 +74,27 @@ impl Queue {
                 // empty queue.
                 None
             }
+=======
+        let b = self.bottom.get();
+        buf[b & MASK] = job;
+        self.bottom.set(b + 1);
+    }
+    
+    // pop a job from the private end of the queue.
+    pub unsafe fn pop(&self) -> Option<*mut Job> {
+        let buf = self.buf.lock().unwrap();
+        
+        let b = self.bottom.get();
+        let t = self.top.get();
+        
+        if b > t {
+            // at least one job. decrement bottom
+            self.bottom.set(b - 1);
+            Some(buf[(b - 1) & MASK])
+        } else {
+            // no jobs.
+            None
+>>>>>>> d1740a71c490e87363e662d93afdc63fb727c26a
         }
     }
     

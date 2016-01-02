@@ -25,7 +25,7 @@ impl<F> Code for CodeImpl<F> where F: Send + FnOnce(&Worker) {
         let f = mem::replace(&mut self.func, mem::uninitialized());
 		f(args);
         if !self.counter.is_null() {
-            (*self.counter).fetch_sub(1, Ordering::Relaxed);
+            (*self.counter).fetch_sub(1, Ordering::Release);
         }
 	}
 }

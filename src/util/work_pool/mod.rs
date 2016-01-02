@@ -61,14 +61,14 @@ impl Worker {
         }
         
         let (mut most_work, mut most_idx) = (0, None);
-        for (idx, queue) in self.queues.iter().enumerate() {
-            let work = queue.len();
-            if work > most_work && idx != self.idx {
-                most_work = work;
-                most_idx = Some(idx);
+        for (i, queue) in self.queues.iter().enumerate() {
+            let len = queue.len();
+            if len > most_work {
+                most_work = len;
+                most_idx = Some(i);
             }
         }
-      
+        
         if let Some(idx) = most_idx {
             self.queues[idx].steal()
         } else {
@@ -124,9 +124,9 @@ impl Worker {
         let s = make_spawner(self, &counter);
         f(&s);
         
-        while counter.load(Ordering::Relaxed) != 0 {
+        while counter.load(Ordering::Acquire) != 0 {
             self.run_next();    
-        }
+        }        
     }
 }
 
@@ -148,18 +148,24 @@ impl<'pool, 'scope> Spawner<'pool, 'scope> {
     where F: 'scope + Send + FnOnce(&Spawner<'pool, 'scope>) {
         use std::mem;
         
+        // for sending the counter pointer across thread boundaries.
+        struct SendCounter(*const AtomicUsize);
+        unsafe impl Send for SendCounter {}
+        
         unsafe { 
             // increment the counter first just in case, somehow, this job
             // gets grabbed before we have a chance to increment it,
             // and we wait for all jobs to complete.
-            (*self.counter).fetch_add(1, Ordering::Relaxed);
+            let counter: SendCounter = SendCounter(self.counter);
+            (*self.counter).fetch_add(1, Ordering::AcqRel);
             self.worker.submit_internal(self.counter, move |worker| {
+                let SendCounter(count_ptr) = counter;
                 // make a new spawner associated with the same scope,
                 // but with the correct worker for the thread -- so if 
                 // this job spawns any children, we won't break any 
                 // invariants by accessing other workers' queues/pools
                 // in unexpected ways.
-                let spawner = make_spawner(worker, self.counter);
+                let spawner = make_spawner(worker, count_ptr);
                 f(&mem::transmute(spawner) )
             });
         }
@@ -397,7 +403,8 @@ impl Drop for WorkPool {
 
 #[cfg(test)]
 mod tests {
-	use super::WorkPool;
+	use super::{WorkPool, Spawner};
+    use test::Bencher;
     
     #[test]
     fn creation_destruction() {

@@ -10,8 +10,19 @@
 
 pub mod component;
 mod entity;
+mod internal;
 mod world;
 
 pub use self::component::Component;
 pub use self::entity::Entity;
 pub use self::world::World;
+
+// Maximum guaranteed component alignment.
+// There may be large implications of this being changed,
+// most notably many things not working.
+const COMPONENT_ALIGN: usize = 16;
+
+// Sizes of blocks in each slab.
+const SMALL_SIZE: usize = 512;
+const MEDIUM_SIZE: usize = 2048;
+const LARGE_SIZE: usize = 8192;

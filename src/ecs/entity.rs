@@ -1,9 +1,5 @@
 use memory::collections::{VecDeque, Vector};
 
-use std::cell::RefCell;
-use std::slice;
-use std::sync::RwLock;
-
 use super::world::WorldAllocator;
 
 // The number of bits in the id to use for the generation.
@@ -24,6 +20,7 @@ const MIN_UNUSED: usize = 1024;
 /// Entities each have a unique id which serves
 /// as a weak pointer to the entity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[repr(C)]
 pub struct Entity {
     id: u32,
 }
@@ -55,7 +52,6 @@ type Unused = VecDeque<u32, WorldAllocator>;
 pub struct EntityManager {
     generation: GenVec,
     unused: Unused,
-    min_unused: usize,
 }
 
 impl EntityManager {
@@ -63,20 +59,19 @@ impl EntityManager {
     pub fn new(alloc: WorldAllocator) -> Self {
         EntityManager {
             generation: GenVec::with_alloc(alloc),
-            unused: Unused::with_alloc_and_capacity(alloc, DEFAULT_MIN_UNUSED + 1),
-            min_unused: min_unused,
+            unused: Unused::with_alloc_and_capacity(alloc, MIN_UNUSED + 1),
         }
     }
     
     /// Creates an entity.
     pub fn next_entity(&mut self) -> Entity {
-        if self.unused.len() <= min_unused {
+        if self.unused.len() <= MIN_UNUSED {
             self.generation.push(0);
-            let idx = generation.len() - 1;
-            Entity::new(idx, 0)
+            let idx = self.generation.len() - 1;
+            Entity::new(idx as u32, 0)
         } else {
             let idx = self.unused.pop_front().unwrap();
-            Entity::new(idx, gen[idx])
+            Entity::new(idx, self.generation[idx as usize])
         }
     }
 
@@ -97,7 +92,10 @@ impl EntityManager {
     /// Whether an entity is currently "alive", or exists.
     #[inline]
     pub fn is_alive(&self, e: Entity) -> bool {
-        self.generation.read().unwrap()[index_of(e) as usize] == generation_of(e)
+        self.generation.get(index_of(e) as usize).and_then(|gen| {
+            if *gen == generation_of(e) { Some(()) }
+            else { None }
+        }).is_some()
     }
 
     /// Destroy an entity.
@@ -105,14 +103,14 @@ impl EntityManager {
         if !self.is_alive(e) { return }
         
         let idx = index_of(e);
-        gen[idx as usize].wrapping_add(1);
-        unused.push_back(idx);
+        self.generation[idx as usize].wrapping_add(1);
+        self.unused.push_back(idx);
     }
     
     /// Destroy all the entities in the slice.
-    pub fn destroy_entities(&self, entities: &[Entity]) {
+    pub fn destroy_entities(&mut self, entities: &[Entity]) {
         for e in entities {
-            self.destroy_entity(e);
+            self.destroy_entity(*e);
         }
     }
     

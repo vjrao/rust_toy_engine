@@ -1,9 +1,17 @@
 use memory::allocator::{self, Address, Allocator, DefaultAllocator, Kind};
 
 use std::marker::PhantomData;
+use std::sync::RwLock;
 
-use super::component::{Component, ComponentMap, make_empty};
-use super::component::{ComponentMaps, Empty, ListEntry, PhantomComponentMaps};
+use super::component::{
+    Component,
+    Components,
+    ComponentOffsetTable,
+    Empty,
+    ListEntry,
+    make_empty,
+    PhantomComponents,
+};
 
 use super::entity::EntityManager;
 
@@ -39,15 +47,19 @@ unsafe impl Allocator for WorldAllocator {
 	}
 }
 
-pub struct World<C: ComponentMaps> {
-	components: C,
+struct State<C: Components> {
+    components: C,
     entities: EntityManager,
-    pool: WorkPool,
     alloc: WorldAllocator,
 }
 
+pub struct World<C: Components> {
+	state: RwLock<State<C>>,
+    pool: WorkPool,
+}
+
 /// Used to build a world with the given components.
-pub struct WorldBuilder<T: PhantomComponentMaps> {
+pub struct WorldBuilder<T: PhantomComponents> {
     phantoms: T,
     /// The number of threads to create the thread pool with.
     pub num_threads: usize,
@@ -64,10 +76,10 @@ impl WorldBuilder<Empty> {
     }
 }
 
-impl<T: PhantomComponentMaps> WorldBuilder<T> {
+impl<T: PhantomComponents> WorldBuilder<T> {
     /// Add a component to the world.
     /// This will panic if the same component is added more than once.
-    pub fn with_component<C: Component>(self) -> WorldBuilder<ListEntry<PhantomData<C>, T>>{
+    pub fn with_component<C: Component>(self) -> WorldBuilder<ListEntry<PhantomData<C>, T>> {
         WorldBuilder {
             phantoms: self.phantoms.push::<C>(),
             num_threads: self.num_threads,
@@ -85,11 +97,15 @@ impl<T: PhantomComponentMaps> WorldBuilder<T> {
     pub fn build(self) -> World<T::Components> {
         let alloc = WorldAllocator(DefaultAllocator);
         let components = self.phantoms.into_components(alloc);
-        World {
+        let state = State {
             components: components,
             entities: EntityManager::new(alloc),
-            pool: WorkPool::new(self.num_threads).unwrap(),
             alloc: alloc,
+        };
+        
+        World {
+            state: RwLock::new(state),
+            pool: WorkPool::new(self.num_threads).unwrap(),
         }
     }
 }
@@ -116,6 +132,6 @@ mod tests {
     
     #[test]
     fn make_world() {
-        let _ = WorldBuilder::new().with_component::<Pos>().build();
+        let _ = WorldBuilder::new().with_component::<Pos>().with_component::<Vel>().build();
     }
 }

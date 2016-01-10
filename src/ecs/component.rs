@@ -1,6 +1,5 @@
 //! This module contains component-related types and traits.
 //!
-//!
 //! Included are some type-level component lists.
 //! this disgusting type system abuse culminates in various types of mixed-type component lists.
 //! These aren't really to be used externally, but instead provide some level of convenience
@@ -16,182 +15,91 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::{Mutex, MutexGuard};
 
-use super::entity::{self, Entity, EntityManager};
+use super::entity::{self, Entity, EntityManager, index_of};
 use super::world::WorldAllocator;
+use super::{COMPONENT_ALIGN, LARGE_SIZE};
+
+// Since space is crucial to these structures, we will use
+// the two most significant bits of the index to signify whether
+// there is an entry for this component. We only allow entities
+// to have 8KB of component data, so 2^14 bits will easily suffice.
+// entity index is unused.
+const MAX_OFFSET: u16 = (1 << 15) - 1;
+const CLEARED: u16 = ::std::u16::MAX;
 
 /// Components are arbitrary data associated with entities.
 pub trait Component: Any + Send + Sync {}
-
 impl<T: Any + Send + Sync> Component for T {}
 
-/// Maps entities to component data. This must be supplied with an entity manager
-/// to be made usable. 
-pub struct ComponentMap<T: Component> {
-    indices: Vector<Option<usize>, WorldAllocator>,
-    data: Vector<Entry<T>, WorldAllocator>,
+// any checks for component types which cannot be done at compile-time
+// will be done here.
+fn assert_component_compliance<T: Component>() {
+    use std::mem;
     
-    // fifo deque / linked-list of free 
-    // indices.
-    first_free: Option<usize>,
-    last_free: Option<usize>,
+    assert!(mem::align_of::<T>() <= COMPONENT_ALIGN, 
+        "Component alignment too large. Maximum supported is {} bytes.", COMPONENT_ALIGN);
+        
+    assert!(mem::size_of::<T>() <= LARGE_SIZE, 
+        "Component size too large. Maximum supported is {} bytes.", LARGE_SIZE);
 }
 
-enum Entry<T> {
-    Full(FullEntry<T>),
-    Empty(Option<usize>),
+/// Maps entities to the offset of this component's data
+/// in their entry in the master table.
+pub struct ComponentOffsetTable<T: Component> {
+    offsets: Vector<u16, WorldAllocator>,
+    _marker: PhantomData<T>,
 }
 
-impl<T> Entry<T> {
-    // Attempts to take the data out of this entry.
-    // Replaces this entry with an empty one with no next index.
-    fn take(&mut self) -> Option<FullEntry<T>> {
-        use std::mem;
-        
-        let entry = Entry::Empty(None);
-        
-        match mem::replace(self, entry) {
-            Entry::Full(full) => Some(full),
-            Entry::Empty(next) => {
-                *self = Entry::Empty(next);
-                None
-            }
-        }
-    }
-}
-
-struct FullEntry<T> {
-    data: T,
-}
-
-impl<T: Component> ComponentMap<T> {
-    // Pop the first value from the free list.
-    // None if there isn't one.
-    fn freelist_pop(&mut self) -> Option<usize> {
-        let next = self.first_free.take();
-        if let &Some(ref next_index) = &next {
-            match &self.data[*next_index] {
-                &Entry::Empty(ref next) => {
-                    self.first_free = next.clone();
-                }
-                // nodes whose indices are in the freelist should
-                // really be empty
-                _ => unreachable!(),
-            }
-        } else {
-            self.last_free = None;
-        }
-        
-        next
-    }
-    
-    // Pushes a free index onto the free list.
-    // Does not alter the data entry for that index.
-    fn freelist_push(&mut self, index: usize) {
-        let last_free = self.last_free.take();
-        if let &Some(ref last_index) = &last_free {
-            // pushing onto non-empty list
-            self.data[*last_index] = Entry::Empty(Some(index));
-        } else {
-            // pushing onto empty list.
-            self.first_free = Some(index);
-        }
-        
-        self.last_free = Some(index);
-    }
-    
+impl<T: Component> ComponentOffsetTable<T> {    
     pub fn new(alloc: WorldAllocator) -> Self {
-        ComponentMap {
-            indices: Vector::with_alloc(alloc),
-            data: Vector::with_alloc(alloc),
-            first_free: None,
-            last_free: None,
+        ComponentOffsetTable {
+            offsets: Vector::with_alloc(alloc),
+            _marker: PhantomData,
         }
     }
     
-    /// Supply this ComponentMap with an EntityManager to get a usable handle.
-    pub fn supply<'a>(&'a mut self, entity_manager: &'a EntityManager) -> MapHandle<'a ,T> {
-        // ensure capacity for indices so unchecked indexing always works.
-        let len = entity_manager.size_hint();
-        self.indices.reserve(len);
-        while self.indices.len() < len {
-            self.indices.push(None);
-        }
-        
-        MapHandle {
-            map: self,
-            entity_manager: entity_manager,
-        }
-    }
-}
-
-pub struct MapHandle<'a, T: 'a + Component> {
-    map: &'a mut ComponentMap<T>,
-    entity_manager: &'a EntityManager, 
-}
-
-impl<'a, T: 'a + Component> MapHandle<'a, T> {
-    /// Set the data stored for `e` to the value stored in `data`.
-    pub fn set(&mut self, e: Entity, data: T) {
-        if !self.entity_manager.is_alive(e) { return; }
-        
-        let entity_index = entity::index_of(e);
-        let entry = Entry::Full(FullEntry {
-            data: data,
-        });
-        
-        if let Some(index) = self.map.indices[entity_index].clone() {
-            self.map.data[index] = entry;
-        } else if let Some(index) = self.map.freelist_pop() {
-            self.map.data[index] = entry;
-            self.map.indices[entity_index] = Some(index);
-        } else {
-            self.map.data.push(entry);
-            self.map.indices[entity_index] = Some(self.map.data.len() - 1);
-        }
-    }
-    
-    /// Try to get a reference to the data stored for `e`.
-    /// Returns None if there isn't any.
-    pub fn get(&self, e: Entity) -> Option<&T> {
-        if !self.entity_manager.is_alive(e) { return None; }
-        
-        if let &Some(ref index) = &self.map.indices[entity::index_of(e)] {
-            match &self.map.data[*index] {
-                &Entry::Full(ref full) => Some(&full.data),
-                // if we're storing an index for an entity, the entry is guaranteed to be full.
-                _ => unreachable!(), 
+    /// Find the offset of the component this manages offsets for relative to the
+    /// data of the entity this manages.
+    pub fn offset_of(&self, entity: Entity) -> Option<u16> {
+        // if the vector isn't long enough yet, that's a sure sign that
+        // we haven't got an index for this entity.
+        self.offsets.get(index_of(entity) as usize).and_then(|offset| {
+            if *offset == CLEARED {
+                None
+            } else {
+                Some(*offset)
             }
-        } else {
-            None
-        }
+        })
     }
     
-    /// Try to get a mutable reference to the data stored for `e`.
-    /// Returns None if there isn't any.
-    pub fn get_mut(&mut self, e: Entity) -> Option<&mut T> {
-        if !self.entity_manager.is_alive(e) { return None; }
+    /// Store the given offset for the entity given.
+    pub fn set(&mut self, entity: Entity, offset: u16) {
+        let idx = index_of(entity) as usize;
+        // there shouldn't be any offsets that use this many bits.
+        debug_assert!(idx <= MAX_OFFSET as usize);
         
-        if let &mut Some(ref index) = &mut self.map.indices[entity::index_of(e)] {
-            match &mut self.map.data[*index] {
-                &mut Entry::Full(ref mut full) => Some(&mut full.data),
-                // if we're storing an index for an entity, the entry is still guaranteed to be full.
-                _ => unreachable!(),
-            }
-        } else {
-            None
+        self.ensure_capacity(idx);
+        self.offsets[idx] = offset;
+    }
+    
+    /// Remove the offset for the entity given.
+    pub fn remove(&mut self, entity: Entity) {
+        let idx = index_of(entity) as usize;
+        
+        // don't bother extending the capacity if we don't even have
+        // entries that far out.
+        if let Some(off) = self.offsets.get_mut(idx) {
+            *off = CLEARED;
         }
     }
     
-    /// Removes the data stored for `e`. Returns the old data
-    /// if it existed.
-    pub fn remove(&mut self, e: Entity) -> Option<T> {
-        if !self.entity_manager.is_alive(e) { return None; }
-        let entity_index = entity::index_of(e);
-        if let Some(index) = self.map.indices[entity_index].clone() {
-            self.map.freelist_push(index);
-            self.map.data[index].take().map(|entry| entry.data)
-        } else {
-            None
+    fn ensure_capacity(&mut self, size: usize) {
+        let len = self.offsets.len();
+        if len >= size { return }
+        
+        self.offsets.reserve(size - len);
+        while self.offsets.len() < size {
+            self.offsets.push(CLEARED);
         }
     }
 }
@@ -207,7 +115,6 @@ pub struct ListEntry<T: Any, P> {
 }
 
 /// Empty case of a list entry.
-// marker is so outsiders can't create one.
 pub struct Empty(PhantomData<()>);
 
 #[doc(hidden)]
@@ -217,9 +124,9 @@ pub fn make_empty() -> Empty {
 
 /// A list of components where each entry is a zero-sized PhantomData.
 /// This is used to signify which components a world will manage, without yet constructing
-/// the maps themselves.
-pub trait PhantomComponentMaps {
-    type Components: ComponentMaps;
+/// the offset tables themselves.
+pub trait PhantomComponents {
+    type Components: Components;
 	/// Push another component type onto this list. This additionally verifies
 	/// that no duplicates are pushed.
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> where Self: Sized;
@@ -227,10 +134,11 @@ pub trait PhantomComponentMaps {
     fn into_components(self, alloc: WorldAllocator) -> Self::Components;
 }
 
-impl PhantomComponentMaps for Empty {
+impl PhantomComponents for Empty {
     type Components = Empty;
     
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Empty> {
+        assert_component_compliance::<T>();
 		ListEntry {
 			val: PhantomData,
 			parent: self,
@@ -241,11 +149,12 @@ impl PhantomComponentMaps for Empty {
     fn into_components(self, _: WorldAllocator) -> Empty { make_empty() }
 }
 
-impl<C: Component, P: PhantomComponentMaps> PhantomComponentMaps for ListEntry<PhantomData<C>, P> {
-    type Components = ListEntry<Mutex<ComponentMap<C>>, P::Components>;
+impl<C: Component, P: PhantomComponents> PhantomComponents for ListEntry<PhantomData<C>, P> {
+    type Components = ListEntry<ComponentOffsetTable<C>, P::Components>;
     
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> {
 		if self.has::<T>() { panic!("Added type to components list twice.") }
+        assert_component_compliance::<T>();
 		
 		ListEntry {
 			val: PhantomData,
@@ -259,37 +168,54 @@ impl<C: Component, P: PhantomComponentMaps> PhantomComponentMaps for ListEntry<P
     
     fn into_components(self, alloc: WorldAllocator) -> Self::Components {
         ListEntry {
-            val: Mutex::new(ComponentMap::new(alloc)),
+            val: ComponentOffsetTable::new(alloc),
             parent: self.parent.into_components(alloc),
         }
     }
 }
 
-/// A list where each entry is a `ComponentMap` with mutually exclusive
-/// access. 
-pub trait ComponentMaps {
-	/// Get mutually exclusive access to the supplied component's map.
-	/// Panics if this list has no entry for `T`.
-	fn lock<T: Component>(&self) -> MutexGuard<ComponentMap<T>>;
+/// A list where each entry is an offset table for that component.
+pub trait Components {
+	/// Get a reference to the offset table for the given component type.
+    /// This panics if the component type is not present in this list.
+	fn get<T: Component>(&self) -> &ComponentOffsetTable<T>;
+    
+    /// Get a mutable reference to the offset table for the given component type.
+    /// This panics if the component type is not present in this list.
+	fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T>;
 }
 
-impl ComponentMaps for Empty {
-	fn lock<T: Component>(&self) -> MutexGuard<ComponentMap<T>> {
-		panic!("No component of given type");
-	}
+impl Components for Empty {
+	fn get<T: Component>(&self) -> &ComponentOffsetTable<T> {
+        panic!("No such component in tables list.");
+    }
+    
+    fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T> {
+        panic!("No such component in tables list.");
+    }
 }
 
-impl<C: Component, P: ComponentMaps> ComponentMaps for ListEntry<Mutex<ComponentMap<C>>, P> {
-	fn lock<T: Component>(&self) -> MutexGuard<ComponentMap<T>> {
+impl<C: Component, P: Components> Components for ListEntry<ComponentOffsetTable<C>, P> {
+	fn get<T: Component>(&self) -> &ComponentOffsetTable<T> {
+        // TypeIds should have resolved to concrete values by the optimization phase.
+        // My guess is that every monomorphization of this function will be inlined into 
+        // a large if-else tree, which will then be optimized down to a single return or panic.
 		if TypeId::of::<T>() == TypeId::of::<C>() {
 			unsafe { 
-				mem::transmute::<
-                    MutexGuard<ComponentMap<C>>,
-                    MutexGuard<ComponentMap<T>>
-                >(self.val.lock().unwrap())
+				mem::transmute(&self.val)
 			}
 		} else {
-			self.parent.lock()
+			self.parent.get()
+		}
+	}
+    
+    fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T> {
+		if TypeId::of::<T>() == TypeId::of::<C>() {
+			unsafe { 
+				mem::transmute(&mut self.val)
+			}
+		} else {
+			self.parent.get_mut()
 		}
 	}
 }
@@ -297,5 +223,16 @@ impl<C: Component, P: ComponentMaps> ComponentMaps for ListEntry<Mutex<Component
 
 #[cfg(test)]
 mod tests {    
-    use super::{ComponentMap};
+    use super::*;
+    
+    struct A;
+    struct B;
+    struct C;
+    struct D;
+    
+    #[test]
+    #[should_panic]
+    fn push_twice() {
+        let _ = make_empty().push::<A>().push::<A>();
+    }
 }

@@ -17,12 +17,22 @@ use super::world::WorldAllocator;
 
 const INITIAL_CAPACITY: usize = 512;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 // What granularity an entity's data is.
 enum Granularity {
     Small,
     Medium,
     Large, 
+}
+
+impl Granularity {
+    fn size(&self) -> usize {
+        match *self {
+            Granularity::Small => SMALL_SIZE,
+            Granularity::Medium => MEDIUM_SIZE,
+            Granularity::Large => LARGE_SIZE,
+        }
+    }
 }
 
 // Metadata about a slab.
@@ -106,22 +116,29 @@ struct EmptySlot {
     padding: [u8; PADDING_SIZE]
 }
 
+enum SlotError {
+    TooBig, // there is not enough room even with a promotion to allocate this component.
+    NeedsPromote(Granularity), // needs a promotion to the contained granularity.
+}
+
 struct BlockHandle {
     header: NonZero<*mut BlockHeader>,
     data: NonZero<*mut u8>,
     granularity: Granularity,
+    index: usize,
 }
 
 impl BlockHandle {
     // create a block handle from a pointer to the beginning of the header.
-    unsafe fn from_raw(ptr: *mut u8, granularity: Granularity) -> Self {
+    unsafe fn from_raw(ptr: *mut u8, granularity: Granularity, index: usize) -> Self {
         assert!(!ptr.is_null());
         let data = ptr.offset(::std::mem::size_of::<BlockHeader>() as isize);
         
         BlockHandle {
             header: NonZero::new(ptr as *mut BlockHeader),
             data: NonZero::new(data),
-            granularity: granularity
+            granularity: granularity,
+            index: index,
         }
     }
     
@@ -130,11 +147,7 @@ impl BlockHandle {
     // this can only be done when recycling a block.
     unsafe fn clear(&mut self) {
         let slot = EmptySlot {
-            size: match self.granularity {
-                Granularity::Small => SMALL_SIZE,
-                Granularity::Medium => MEDIUM_SIZE,
-                Granularity::Large => LARGE_SIZE,
-            } as u32,
+            size: self.granularity.size() as u32,
             next_free: NO_OFFSET,
             padding: [0; PADDING_SIZE],
         };
@@ -213,8 +226,7 @@ impl BlockHandle {
     
     // find the first free slot with the given size, rounding up to the next multiple
     // of COMPONENT_ALIGN to reduce fragmentation.
-    // returns None if there is no room.
-    unsafe fn next_free(&mut self, size: usize) -> Option<usize> {
+    unsafe fn next_free(&mut self, size: usize) -> Result<usize, SlotError> {
         let mut prev_off = None;
         let mut next_off = (**self.header).freelist_begin;
         let size = round_up_to(size, COMPONENT_ALIGN) as u32;
@@ -236,7 +248,7 @@ impl BlockHandle {
                     (*prev_slot).next_free = next_slot;
                 }
                 
-                return Some(this_off as usize);
+                return Ok(this_off as usize);
             } else if slot_size > size {
                 // found a slot we can split.
                 let (split_off, split_size) = (this_off + size, slot_size - size);
@@ -256,15 +268,24 @@ impl BlockHandle {
                     padding: [0; PADDING_SIZE],
                 });
                 
-                return Some(this_off as usize);
+                return Ok(this_off as usize);
             } else {
-                // keep looping, we'll find it eventually.
                 prev_off = Some(this_off);
                 next_off = next_slot;
             }
         }
         
-        None
+        // didn't find any slot that fit the specification. Find out if we can promote and by how much.
+        let cur_size = self.granularity.size();
+        
+        let needed_size = cur_size + size as usize;  
+        if needed_size > LARGE_SIZE {
+            Err(SlotError::TooBig)
+        } else if needed_size > MEDIUM_SIZE {
+            Err(SlotError::NeedsPromote(Granularity::Large))
+        } else {
+            Err(SlotError::NeedsPromote(Granularity::Medium))
+        }
     }
     
     // utility function for merging adjacent slots.
@@ -301,6 +322,11 @@ impl BlockHandle {
             // blocks are not adjacent. continue looping as normal.
             prev_off = Some(next_off);
         }
+    }
+    
+    // Returns the unique granularity-index pair which describes this block.
+    fn gran_idx(&self) -> (Granularity, usize) {
+        (self.granularity, self.index)
     }
 }
 
@@ -400,7 +426,7 @@ impl Blob {
             // at this point, we've already either gotten a free block or grown the buffer if there 
             // weren't any. The data pointer is available.
             let mut block_handle = BlockHandle::from_raw(self.data.unwrap()
-                .offset((slab_start + (index * block_size)) as isize), granularity);
+                .offset((slab_start + (index * block_size)) as isize), granularity, index);
                 
             block_handle.clear();
             block_handle
@@ -482,23 +508,44 @@ impl Blob {
         };
         
         self.data.clone().map(|data_ptr| unsafe {
-            BlockHandle::from_raw(data_ptr.offset(off as isize), granularity)
+            BlockHandle::from_raw(data_ptr.offset(off as isize), granularity, off)
         })
     }
     
     // Free a block. It must not be used again until it is next allocated.
-    unsafe fn free_block(&mut self, granularity: Granularity, index: usize) {
-        debug_assert!(match granularity {
+    unsafe fn free_block(&mut self, block: BlockHandle) {
+        let index = block.index;
+        debug_assert!(match block.granularity {
             Granularity::Small => self.small.is_alive(index),
             Granularity::Medium => self.medium.is_alive(index),
             Granularity::Large => self.large.is_alive(index),
         });
                      
-        match granularity {
+        match block.granularity {
             Granularity::Small => self.small.mark_free(index),
             Granularity::Medium => self.medium.mark_free(index),
             Granularity::Large => self.large.mark_free(index),
         }
+    }
+    
+    // Promote a block to a higher granularity, growing if necessary.
+    // Returns a handle to the new block.
+    unsafe fn promote_block(&mut self, block: BlockHandle, new_gran: Granularity) -> BlockHandle {
+        if block.granularity == Granularity::Large { panic!("Attempted to promote max-sized block") }      
+        let mut new_handle = self.next_block(new_gran);
+        let new_idx = new_handle.index;
+        
+        let size = block.granularity.size();
+        let new_size = new_gran.size();
+        ::std::ptr::copy_nonoverlapping(*block.header as *mut u8, 
+            *new_handle.header as *mut u8, 
+            block_size_with_header(size));
+            
+        // add a new, free slot to the end.
+        new_handle.mark_free(size, new_size - size);    
+        self.free_block(block);
+        
+        new_handle
     }
 }
 

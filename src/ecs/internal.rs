@@ -384,16 +384,22 @@ impl Blob {
             old_num_blocks
         });
         
+        debug_assert!(match granularity {
+            Granularity::Small => !self.small.is_alive(index),
+            Granularity::Medium => !self.medium.is_alive(index),
+            Granularity::Large => !self.large.is_alive(index),
+        });
+        
         unsafe {
             let (slab_start, block_size) = match granularity {
                 Granularity::Small => (self.small_offset(), block_size_with_header(SMALL_SIZE)),
                 Granularity::Medium => (self.medium_offset(), block_size_with_header(MEDIUM_SIZE)),
                 Granularity::Large => (self.large_offset(), block_size_with_header(LARGE_SIZE)),
             };
-            
+    
             // at this point, we've already either gotten a free block or grown the buffer if there 
             // weren't any. The data pointer is available.
-            let block_handle = BlockHandle::from_raw(self.data.unwrap()
+            let mut block_handle = BlockHandle::from_raw(self.data.unwrap()
                 .offset((slab_start + (index * block_size)) as isize), granularity);
                 
             block_handle.clear();
@@ -482,13 +488,16 @@ impl Blob {
     
     // Free a block. It must not be used again until it is next allocated.
     unsafe fn free_block(&mut self, granularity: Granularity, index: usize) {
-        if let Some(mut block) = self.get_block(granularity, index) {
-            block.clear();                    
-            match granularity {
-                Granularity::Small => self.small.mark_free(index),
-                Granularity::Medium => self.medium.mark_free(index),
-                Granularity::Large => self.large.mark_free(index),
-            }
+        debug_assert!(match granularity {
+            Granularity::Small => self.small.is_alive(index),
+            Granularity::Medium => self.medium.is_alive(index),
+            Granularity::Large => self.large.is_alive(index),
+        });
+                     
+        match granularity {
+            Granularity::Small => self.small.mark_free(index),
+            Granularity::Medium => self.medium.mark_free(index),
+            Granularity::Large => self.large.mark_free(index),
         }
     }
 }

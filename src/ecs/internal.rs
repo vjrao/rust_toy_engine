@@ -64,6 +64,12 @@ impl SlabMetadata {
     unsafe fn mark_free(&mut self, idx: usize) {
         self.block_tracker[idx] = false;
     }
+    
+    // whether the block at index `idx` is alive.
+    // panics on out-of-bounds.
+    fn is_alive(&self, idx: usize) -> bool {
+        self.block_tracker[idx]
+    }
 }
 
 const PADDING_SIZE: usize = COMPONENT_ALIGN - 8;
@@ -355,8 +361,7 @@ impl Blob {
     }
     
     // Returns the first free block in the given granularity's slab.
-    // grows the buffer if necessary. This block's header has not been
-    // cleared yet.
+    // grows the buffer if necessary.
     fn next_block(&mut self, granularity: Granularity) -> BlockHandle {
         // scan the given granularity's bookkeeping table to find the first free block.
         let maybe_index = match granularity {
@@ -388,8 +393,11 @@ impl Blob {
             
             // at this point, we've already either gotten a free block or grown the buffer if there 
             // weren't any. The data pointer is available.
-            BlockHandle::from_raw(self.data.unwrap()
-                .offset((slab_start + (index * block_size)) as isize), granularity)
+            let block_handle = BlockHandle::from_raw(self.data.unwrap()
+                .offset((slab_start + (index * block_size)) as isize), granularity);
+                
+            block_handle.clear();
+            block_handle
         }
     }
     
@@ -427,7 +435,7 @@ impl Blob {
         
             debug_assert!(*all_slabs.align() >= COMPONENT_ALIGN);
         
-        // perform the allocation, just diverge if out of memory.
+            // perform the allocation, just diverge if out of memory.
             let alloc_res = if let Some(ptr) = self.data.take() {
                 self.alloc.realloc(NonZero::new(ptr), self.data_kind.take().unwrap(), all_slabs)   
             } else {
@@ -453,9 +461,23 @@ impl Blob {
         }
     }
     
-    // get a handle to a live block.
+    // get a handle to live block.
     fn get_block(&self, granularity: Granularity, index: usize) -> Option<BlockHandle> {
-        unimplemented!()
+        debug_assert!(match granularity {
+            Granularity::Small => self.small.is_alive(index),
+            Granularity::Medium => self.medium.is_alive(index),
+            Granularity::Large => self.large.is_alive(index),
+        });
+        
+        let off = match granularity {
+            Granularity::Small => self.small_offset() + index * block_size_with_header(SMALL_SIZE),
+            Granularity::Medium => self.medium_offset() + index * block_size_with_header(MEDIUM_SIZE),
+            Granularity::Large => self.large_offset() + index * block_size_with_header(LARGE_SIZE)
+        };
+        
+        self.data.clone().map(|data_ptr| unsafe {
+            BlockHandle::from_raw(data_ptr.offset(off as isize), granularity)
+        })
     }
     
     // Free a block. It must not be used again until it is next allocated.
@@ -478,7 +500,7 @@ impl Drop for Blob {
         
         unsafe {
             if let Some(kind) = self.data_kind.take() {
-                self.alloc.dealloc(NonZero::new(self.data.unwrap()), kind);
+                let _ = self.alloc.dealloc(NonZero::new(self.data.unwrap()), kind);
             }
         }
     }
@@ -512,6 +534,22 @@ impl MasterOffsetTable {
     fn ensure_capacity(&mut self, size: usize) {
         while self.data.len() < size {
             self.data.push(None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Blob, Granularity};
+    use ecs::world::WorldAllocator;
+    use memory::DefaultAllocator;
+    
+    #[test]
+    fn grow_blob() {
+        let alloc = WorldAllocator(DefaultAllocator);
+        let mut blob = Blob::new(alloc);
+        for _ in 0..8 {
+            blob.grow();
         }
     }
 }

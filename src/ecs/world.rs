@@ -20,8 +20,13 @@ use util::work_pool::WorkPool;
 /// The world's allocator: for long term storage.
 ///
 /// For now, this just forwards to the heap.
+#[cfg(not(test))]
 #[derive(Clone, Copy)]
 pub struct WorldAllocator(DefaultAllocator);
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub struct WorldAllocator(pub DefaultAllocator);
 
 unsafe impl Allocator for WorldAllocator {
 	type Error = <DefaultAllocator as Allocator>::Error;

@@ -14,6 +14,12 @@ const INDEX_BITS: u32 = (32 - GEN_BITS);
 const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
 
 // The minimum amount of entities which must be marked as dead before
+// beginning to recycle indices. Coupled with the bits which mark the generation
+// of an entity, a user must spawn at least MIN_UNUSED * 2^GEN_BITS entities
+// before an exact entity will resurface.
+// for the original values of 1024 and 8, an entity will not be reused until
+// at least 256K entities have been spawned.
+pub const MIN_UNUSED: usize = 1024;
 
 /// An unique entity.
 /// Entities each have a unique id which serves
@@ -72,20 +78,6 @@ impl EntityManager {
             let idx = self.unused.pop_front().unwrap();
             Entity::new(idx, self.generation[idx as usize])
         }
-    }
-
-    /// Creates n entities and puts them into the slice given.
-    /// If the slice is smaller than n, it only creates enough entities to fill the slice.
-    ///
-    /// Returns the number of entities created.
-    pub fn next_entities(&mut self, buf: &mut [Entity], n: usize) -> usize {
-        let num = ::std::cmp::min(n, buf.len());
-        
-        for i in 0..num {
-            buf[i] = self.next_entity();
-        }
-        
-        num
     }
 
     /// Whether an entity is currently "alive", or exists.

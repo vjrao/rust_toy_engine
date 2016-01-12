@@ -89,10 +89,10 @@ impl EntityManager {
         }).is_some()
     }
 
-    /// Destroy an entity.
-    pub fn destroy_entity(&mut self, e: Entity) {
-        if !self.is_alive(e) { return }
-        
+    /// Destroy an entity. THe entity must be alive when this 
+    /// is called. Destroying an entity multiple times can lead
+    /// to memory unsafety.
+    pub unsafe fn destroy_entity(&mut self, e: Entity) {
         let idx = index_of(e);
         self.generation[idx as usize].wrapping_add(1);
         self.unused.push_back(idx);

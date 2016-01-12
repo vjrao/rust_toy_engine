@@ -98,13 +98,6 @@ impl EntityManager {
         self.unused.push_back(idx);
     }
     
-    /// Destroy all the entities in the slice.
-    pub fn destroy_entities(&mut self, entities: &[Entity]) {
-        for e in entities {
-            self.destroy_entity(*e);
-        }
-    }
-    
     /// Get an upper bound on the number of entities which could be live.
     pub fn size_hint(&self) -> usize {
         self.generation.len()

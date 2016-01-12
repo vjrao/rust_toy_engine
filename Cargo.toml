@@ -5,3 +5,4 @@ authors = ["rphmeier <rphmeier@gmail.com>"]
 
 [dependencies]
 num_cpus = "0.2.10"
+jobsteal = "^0.2"

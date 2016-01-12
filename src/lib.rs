@@ -19,11 +19,11 @@
 
 pub mod ecs;
 pub mod memory;
-mod util;
 
 extern crate alloc;
 extern crate core;
 extern crate num_cpus;
+extern crate jobsteal;
 
 #[cfg(test)]
 extern crate test;

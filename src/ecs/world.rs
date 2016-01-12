@@ -22,7 +22,7 @@ use super::internal::{
     MasterOffsetTable,
 };
 
-use util::work_pool::WorkPool;
+use jobsteal::WorkPool;
 
 /// The world's allocator: for long term storage.
 ///

@@ -676,6 +676,33 @@ impl<T: Component> ComponentOffsetTable<T> {
         self.offsets.reserve(size - len);
         while self.offsets.len() < size {
             self.offsets.push(CLEARED);
+struct MasterOffsetTable {
+    data: Vector<Option<(Granularity, usize)>, WorldAllocator>,
+}
+
+impl MasterOffsetTable {
+    fn set(&mut self, entity: Entity, granularity: Granularity, offset: usize) {
+        let idx = index_of(entity) as usize;
+        self.ensure_capacity(idx);
+        self.data[idx] = Some((granularity, offset));
+    }
+    
+    fn get(&self, entity: Entity) -> Option<(Granularity, usize)> {
+        let entry: Option<&Option<(Granularity, usize)>> = self.data.get(index_of(entity) as usize);
+        entry.map(Clone::clone).unwrap_or(None)
+    }
+    
+    fn remove(&mut self, entity: Entity) {
+        let entry: Option<&mut Option<(Granularity, usize)>> = self.data.get_mut(index_of(entity) as usize);
+        if let Some(entry) = entry {
+            *entry = None;
+        }
+    }
+    
+    // ensure enough capacity for `size` elements.
+    fn ensure_capacity(&mut self, size: usize) {
+        while self.data.len() < size {
+            self.data.push(None);
         }
     }
 }

@@ -8,14 +8,14 @@
 //! This is a work in progress and is not in a usable state at the moment.
 #![allow(dead_code, unused_imports)]
 
-pub mod component;
+mod component;
 mod entity;
 mod internal;
 mod world;
 
 pub use self::component::Component;
 pub use self::entity::Entity;
-pub use self::world::World;
+pub use self::world::{World, WorldBuilder};
 
 // Maximum guaranteed component alignment.
 // There may be large implications of this being changed,

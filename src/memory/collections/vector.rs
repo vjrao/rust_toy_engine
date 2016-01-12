@@ -120,6 +120,24 @@ impl<T, A: Allocator> Vector<T, A> {
 			None
 		}
 	}
+	
+	/// Truncates the vector to the given amount of elements
+	pub fn truncate(&mut self, len: usize) {
+        unsafe {
+            // drop any extra elements
+            while len < self.len {
+                // decrement len before the read(), so a panic on Drop doesn't
+                // re-drop the just-failed value.
+                self.len -= 1;
+                ptr::read(self.get_unchecked(self.len));
+            }
+        }
+    }
+	
+	/// Clears all elements in the vector.
+	pub fn clear(&mut self) {
+		self.truncate(0);
+	}
 }
 
 impl<T, A: Allocator> Deref for Vector<T, A> {

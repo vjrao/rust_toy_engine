@@ -16,16 +16,9 @@ use std::mem;
 use std::sync::{Mutex, MutexGuard};
 
 use super::entity::{self, Entity, EntityManager, index_of};
+use super::internal::ComponentOffsetTable;
 use super::world::WorldAllocator;
 use super::{COMPONENT_ALIGN, LARGE_SIZE};
-
-// Since space is crucial to these structures, we will use
-// the two most significant bits of the index to signify whether
-// there is an entry for this component. We only allow entities
-// to have 8KB of component data, so 2^14 bits will easily suffice.
-// entity index is unused.
-const MAX_OFFSET: u16 = (1 << 15) - 1;
-const CLEARED: u16 = ::std::u16::MAX;
 
 /// Components are arbitrary data associated with entities.
 pub trait Component: Any + Send + Sync {}
@@ -41,67 +34,6 @@ fn assert_component_compliance<T: Component>() {
         
     assert!(mem::size_of::<T>() <= LARGE_SIZE, 
         "Component size too large. Maximum supported is {} bytes.", LARGE_SIZE);
-}
-
-/// Maps entities to the offset of this component's data
-/// in their entry in the master table.
-pub struct ComponentOffsetTable<T: Component> {
-    offsets: Vector<u16, WorldAllocator>,
-    _marker: PhantomData<T>,
-}
-
-impl<T: Component> ComponentOffsetTable<T> {    
-    pub fn new(alloc: WorldAllocator) -> Self {
-        ComponentOffsetTable {
-            offsets: Vector::with_alloc(alloc),
-            _marker: PhantomData,
-        }
-    }
-    
-    /// Find the offset of the component this manages offsets for relative to the
-    /// data of the entity this manages.
-    pub fn offset_of(&self, entity: Entity) -> Option<u16> {
-        // if the vector isn't long enough yet, that's a sure sign that
-        // we haven't got an index for this entity.
-        self.offsets.get(index_of(entity) as usize).and_then(|offset| {
-            if *offset == CLEARED {
-                None
-            } else {
-                Some(*offset)
-            }
-        })
-    }
-    
-    /// Store the given offset for the entity given.
-    pub fn set(&mut self, entity: Entity, offset: u16) {
-        let idx = index_of(entity) as usize;
-        // there shouldn't be any offsets that use this many bits.
-        debug_assert!(idx <= MAX_OFFSET as usize);
-        
-        self.ensure_capacity(idx);
-        self.offsets[idx] = offset;
-    }
-    
-    /// Remove the offset for the entity given.
-    pub fn remove(&mut self, entity: Entity) {
-        let idx = index_of(entity) as usize;
-        
-        // don't bother extending the capacity if we don't even have
-        // entries that far out.
-        if let Some(off) = self.offsets.get_mut(idx) {
-            *off = CLEARED;
-        }
-    }
-    
-    fn ensure_capacity(&mut self, size: usize) {
-        let len = self.offsets.len();
-        if len >= size { return }
-        
-        self.offsets.reserve(size - len);
-        while self.offsets.len() < size {
-            self.offsets.push(CLEARED);
-        }
-    }
 }
 
 /////////////////////////////////////////////////////
@@ -122,13 +54,13 @@ pub fn make_empty() -> Empty {
     Empty(PhantomData)
 }
 
-/// A list of components where each entry is a zero-sized PhantomData.
-/// This is used to signify which components a world will manage, without yet constructing
-/// the offset tables themselves.
+// A list of components where each entry is a zero-sized PhantomData.
+// This is used to signify which components a world will manage, without yet constructing
+// the offset tables themselves.
 pub trait PhantomComponents {
     type Components: Components;
-	/// Push another component type onto this list. This additionally verifies
-	/// that no duplicates are pushed.
+	// Push another component type onto this list. This additionally verifies
+	// that no duplicates are pushed.
 	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> where Self: Sized;
 	fn has<T: Component>(&self) -> bool;
     fn into_components(self, alloc: WorldAllocator) -> Self::Components;
@@ -174,15 +106,20 @@ impl<C: Component, P: PhantomComponents> PhantomComponents for ListEntry<Phantom
     }
 }
 
-/// A list where each entry is an offset table for that component.
+// A list where each entry is an offset table for that component.
 pub trait Components {
-	/// Get a reference to the offset table for the given component type.
-    /// This panics if the component type is not present in this list.
+	// Get a reference to the offset table for the given component type.
+    // This panics if the component type is not present in this list.
 	fn get<T: Component>(&self) -> &ComponentOffsetTable<T>;
     
-    /// Get a mutable reference to the offset table for the given component type.
-    /// This panics if the component type is not present in this list.
+    // Get a mutable reference to the offset table for the given component type.
+    // This panics if the component type is not present in this list.
 	fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T>;
+    
+    // Remove all component offsets from each entity in the slice.
+    // we batch this because each component offset table may be located
+    // somewhere else in memory, so we try to minimize cache misses.
+    fn clear_components_for(&mut self, entities: &[Entity]);
 }
 
 impl Components for Empty {
@@ -193,6 +130,8 @@ impl Components for Empty {
     fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T> {
         panic!("No such component in tables list.");
     }
+    
+    fn clear_components_for(&mut self, _: &[Entity]) {}
 }
 
 impl<C: Component, P: Components> Components for ListEntry<ComponentOffsetTable<C>, P> {
@@ -218,6 +157,14 @@ impl<C: Component, P: Components> Components for ListEntry<ComponentOffsetTable<
 			self.parent.get_mut()
 		}
 	}
+    
+    fn clear_components_for(&mut self, entities: &[Entity]){
+        for entity in entities.iter() {
+            self.val.remove(*entity);
+        }
+        
+        self.parent.clear_components_for(entities);
+    }
 }
 
 

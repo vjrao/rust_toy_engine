@@ -13,8 +13,13 @@ const GEN_MASK: u32 = (1 << GEN_BITS) - 1;
 const INDEX_BITS: u32 = (32 - GEN_BITS);
 const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
 
-// The default value for min_unused. 
-const MIN_UNUSED: usize = 1024;
+// The minimum amount of entities which must be marked as dead before
+// beginning to recycle indices. Coupled with the bits which mark the generation
+// of an entity, a user must spawn at least MIN_UNUSED * 2^GEN_BITS entities
+// before an exact entity will resurface.
+// for the original values of 1024 and 8, an entity will not be reused until
+// at least 256K entities have been spawned.
+pub const MIN_UNUSED: usize = 1024;
 
 /// An unique entity.
 /// Entities each have a unique id which serves
@@ -75,20 +80,6 @@ impl EntityManager {
         }
     }
 
-    /// Creates n entities and puts them into the slice given.
-    /// If the slice is smaller than n, it only creates enough entities to fill the slice.
-    ///
-    /// Returns the number of entities created.
-    pub fn next_entities(&mut self, buf: &mut [Entity], n: usize) -> usize {
-        let num = ::std::cmp::min(n, buf.len());
-        
-        for i in 0..num {
-            buf[i] = self.next_entity();
-        }
-        
-        num
-    }
-
     /// Whether an entity is currently "alive", or exists.
     #[inline]
     pub fn is_alive(&self, e: Entity) -> bool {
@@ -98,20 +89,13 @@ impl EntityManager {
         }).is_some()
     }
 
-    /// Destroy an entity.
-    pub fn destroy_entity(&mut self, e: Entity) {
-        if !self.is_alive(e) { return }
-        
+    /// Destroy an entity. THe entity must be alive when this 
+    /// is called. Destroying an entity multiple times can lead
+    /// to memory unsafety.
+    pub unsafe fn destroy_entity(&mut self, e: Entity) {
         let idx = index_of(e);
         self.generation[idx as usize].wrapping_add(1);
         self.unused.push_back(idx);
-    }
-    
-    /// Destroy all the entities in the slice.
-    pub fn destroy_entities(&mut self, entities: &[Entity]) {
-        for e in entities {
-            self.destroy_entity(*e);
-        }
     }
     
     /// Get an upper bound on the number of entities which could be live.

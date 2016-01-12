@@ -13,8 +13,7 @@ const GEN_MASK: u32 = (1 << GEN_BITS) - 1;
 const INDEX_BITS: u32 = (32 - GEN_BITS);
 const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
 
-// The default value for min_unused. 
-const MIN_UNUSED: usize = 1024;
+// The minimum amount of entities which must be marked as dead before
 
 /// An unique entity.
 /// Entities each have a unique id which serves

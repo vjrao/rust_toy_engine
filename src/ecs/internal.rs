@@ -1,6 +1,8 @@
 //! Internal data representation for the entity component system.
 use core::nonzero::NonZero;
 use memory::Vector;
+
+use std::marker::PhantomData;
 use std::ptr;
 
 use super::{
@@ -116,12 +118,12 @@ struct EmptySlot {
     padding: [u8; PADDING_SIZE]
 }
 
-enum SlotError {
+pub enum SlotError {
     TooBig, // there is not enough room even with a promotion to allocate this component.
     NeedsPromote(Granularity), // needs a promotion to the contained granularity.
 }
 
-struct BlockHandle {
+pub struct BlockHandle {
     header: NonZero<*mut BlockHeader>,
     data: NonZero<*mut u8>,
     granularity: Granularity,
@@ -156,8 +158,13 @@ impl BlockHandle {
         (**self.header).freelist_begin = 0;
     }
     
+    // get a pointer to the start of the data.
+    pub unsafe fn data_ptr(&self) -> *mut u8 {
+        *self.data
+    }
+    
     // marks the slot at the given offset from the start of the data to free.
-    unsafe fn mark_free(&mut self, offset: usize, size: usize) {
+    pub unsafe fn mark_free(&mut self, offset: usize, size: usize) {
         use std::u32;
         
         assert!(offset < u32::MAX as usize);
@@ -226,7 +233,7 @@ impl BlockHandle {
     
     // find the first free slot with the given size, rounding up to the next multiple
     // of COMPONENT_ALIGN to reduce fragmentation.
-    unsafe fn next_free(&mut self, size: usize) -> Result<usize, SlotError> {
+    pub unsafe fn next_free(&mut self, size: usize) -> Result<usize, SlotError> {
         let mut prev_off = None;
         let mut next_off = (**self.header).freelist_begin;
         let size = round_up_to(size, COMPONENT_ALIGN) as u32;
@@ -291,7 +298,7 @@ impl BlockHandle {
     // utility function for merging adjacent slots.
     // slot are said to be adjacent if their offset plus their size
     // adds up to the offset of the next block.
-    unsafe fn merge_adjacent_slots(&mut self) {
+    pub unsafe fn merge_adjacent_slots(&mut self) {
         let mut prev_off = None;
         let mut next_off = (**self.header).freelist_begin;
         
@@ -325,7 +332,7 @@ impl BlockHandle {
     }
     
     // Returns the unique granularity-index pair which describes this block.
-    fn gran_idx(&self) -> (Granularity, usize) {
+    pub fn gran_idx(&self) -> (Granularity, usize) {
         (self.granularity, self.index)
     }
 }
@@ -333,7 +340,7 @@ impl BlockHandle {
 // The data blob is where all the component data is stored.
 // It is a contiguous block of memory logically separated into "slabs" of the granularities above.
 // Each granularity is given the same number of possible entries.
-struct Blob {
+pub struct Blob {
     data: Option<*mut u8>,
     data_kind: Option<::memory::Kind>,
     blocks_per_slab: usize,
@@ -346,7 +353,7 @@ struct Blob {
 
 impl Blob {
     // Create a new blob. This does not allocate.    
-    fn new(alloc: WorldAllocator) -> Self {
+    pub fn new(alloc: WorldAllocator) -> Self {
         Blob {
             data: None,
             data_kind: None,
@@ -388,7 +395,7 @@ impl Blob {
     
     // Returns the first free block in the given granularity's slab.
     // grows the buffer if necessary.
-    fn next_block(&mut self, granularity: Granularity) -> BlockHandle {
+    pub fn next_block(&mut self, granularity: Granularity) -> BlockHandle {
         // scan the given granularity's bookkeeping table to find the first free block.
         let maybe_index = match granularity {
             Granularity::Small => self.small.next_block(),
@@ -434,7 +441,7 @@ impl Blob {
     }
     
     // doubles the size of each slab.
-    fn grow(&mut self) {
+    pub fn grow(&mut self) {
         use core::nonzero::NonZero;
         use memory::{Allocator, Kind};
         
@@ -494,7 +501,7 @@ impl Blob {
     }
     
     // get a handle to live block.
-    fn get_block(&self, granularity: Granularity, index: usize) -> Option<BlockHandle> {
+    pub fn get_block(&self, granularity: Granularity, index: usize) -> Option<BlockHandle> {
         debug_assert!(match granularity {
             Granularity::Small => self.small.is_alive(index),
             Granularity::Medium => self.medium.is_alive(index),
@@ -513,7 +520,7 @@ impl Blob {
     }
     
     // Free a block. It must not be used again until it is next allocated.
-    unsafe fn free_block(&mut self, block: BlockHandle) {
+    pub unsafe fn free_block(&mut self, block: BlockHandle) {
         let index = block.index;
         debug_assert!(match block.granularity {
             Granularity::Small => self.small.is_alive(index),
@@ -530,7 +537,7 @@ impl Blob {
     
     // Promote a block to a higher granularity, growing if necessary.
     // Returns a handle to the new block.
-    unsafe fn promote_block(&mut self, block: BlockHandle, new_gran: Granularity) -> BlockHandle {
+    pub unsafe fn promote_block(&mut self, block: BlockHandle, new_gran: Granularity) -> BlockHandle {
         if block.granularity == Granularity::Large { panic!("Attempted to promote max-sized block") }      
         let mut new_handle = self.next_block(new_gran);
         let new_idx = new_handle.index;
@@ -563,33 +570,112 @@ impl Drop for Blob {
 }
 
 // Stores a granularity, offset pair for each entity.
-struct MasterOffsetTable {
-    data: Vector<Option<(Granularity, usize)>, WorldAllocator>,
+pub struct MasterOffsetTable {
+    offsets: Vector<Option<(Granularity, usize)>, WorldAllocator>,
 }
 
 impl MasterOffsetTable {
-    fn set(&mut self, entity: Entity, granularity: Granularity, offset: usize) {
-        let idx = index_of(entity) as usize;
-        self.ensure_capacity(idx);
-        self.data[idx] = Some((granularity, offset));
+    pub fn new(alloc: WorldAllocator) -> Self {
+        MasterOffsetTable {
+            offsets: Vector::with_alloc(alloc)
+        }    
     }
     
-    fn get(&self, entity: Entity) -> Option<(Granularity, usize)> {
-        let entry: Option<&Option<(Granularity, usize)>> = self.data.get(index_of(entity) as usize);
+    pub fn set(&mut self, entity: Entity, granularity: Granularity, offset: usize) {
+        let idx = index_of(entity) as usize;
+        self.ensure_capacity(idx);
+        self.offsets[idx] = Some((granularity, offset));
+    }
+    
+    pub fn offset_of(&self, entity: Entity) -> Option<(Granularity, usize)> {
+        let entry: Option<&Option<(Granularity, usize)>> = self.offsets.get(index_of(entity) as usize);
         entry.map(Clone::clone).unwrap_or(None)
     }
     
-    fn remove(&mut self, entity: Entity) {
-        let entry: Option<&mut Option<(Granularity, usize)>> = self.data.get_mut(index_of(entity) as usize);
-        if let Some(entry) = entry {
-            *entry = None;
-        }
+    pub fn remove(&mut self, entity: Entity) -> Option<(Granularity, usize)> {
+        let entry: Option<&mut Option<(Granularity, usize)>> = self.offsets.get_mut(index_of(entity) as usize);
+        entry.and_then(|off| off.take())
     }
     
     // ensure enough capacity for `size` elements.
     fn ensure_capacity(&mut self, size: usize) {
-        while self.data.len() < size {
-            self.data.push(None);
+        let len = self.offsets.len();
+        if len >= size { return }
+        
+        self.offsets.reserve(size - len);
+        while self.offsets.len() < size {
+            self.offsets.push(None);
+        }
+    }
+}
+
+// Since space is crucial to these structures, we will use
+// the two most significant bits of the index to signify whether
+// there is an entry for this component. We only allow entities
+// to have 8KB of component data, so 2^14 bits will easily suffice.
+// entity index is unused.
+const MAX_OFFSET: u16 = (1 << 15) - 1;
+const CLEARED: u16 = ::std::u16::MAX;
+
+/// Maps entities to the offset of this component's data
+/// from the start of their block.
+pub struct ComponentOffsetTable<T: Component> {
+    offsets: Vector<u16, WorldAllocator>,
+    _marker: PhantomData<T>,
+}
+
+impl<T: Component> ComponentOffsetTable<T> {    
+    pub fn new(alloc: WorldAllocator) -> Self {
+        ComponentOffsetTable {
+            offsets: Vector::with_alloc(alloc),
+            _marker: PhantomData,
+        }
+    }
+    
+    /// Find the offset of the component this manages offsets for relative to the
+    /// data of the entity this manages.
+    pub fn offset_of(&self, entity: Entity) -> Option<u16> {
+        // if the vector isn't long enough yet, that's a sure sign that
+        // we haven't got an index for this entity.
+        self.offsets.get(index_of(entity) as usize).and_then(|offset| {
+            if *offset == CLEARED {
+                None
+            } else {
+                Some(*offset)
+            }
+        })
+    }
+    
+    /// Store the given offset for the entity given.
+    pub fn set(&mut self, entity: Entity, offset: u16) {
+        let idx = index_of(entity) as usize;
+        // there shouldn't be any offsets that use this many bits.
+        debug_assert!(idx <= MAX_OFFSET as usize);
+        
+        self.ensure_capacity(idx);
+        self.offsets[idx] = offset;
+    }
+    
+    /// Remove the offset for the entity given.
+    pub fn remove(&mut self, entity: Entity) -> Option<u16> {
+        use std::mem;
+        
+        let idx = index_of(entity) as usize;
+        
+        // don't bother extending the capacity if we don't even have
+        // entries that far out.
+        self.offsets.get_mut(idx)
+            .map(|off| mem::replace(off, CLEARED))
+            .and_then(|off| if off == CLEARED { None } else { Some(off) } )
+    }
+    
+    fn ensure_capacity(&mut self, size: usize) {
+        let len = self.offsets.len();
+        if len >= size { return }
+        
+        self.offsets.reserve(size - len);
+        while self.offsets.len() < size {
+            self.offsets.push(CLEARED);
         }
     }
 }

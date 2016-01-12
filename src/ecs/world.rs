@@ -1,4 +1,5 @@
 use memory::allocator::{self, Address, Allocator, DefaultAllocator, Kind};
+use memory::Vector;
 
 use std::marker::PhantomData;
 use std::sync::RwLock;
@@ -6,14 +7,20 @@ use std::sync::RwLock;
 use super::component::{
     Component,
     Components,
-    ComponentOffsetTable,
     Empty,
     ListEntry,
     make_empty,
     PhantomComponents,
 };
 
-use super::entity::EntityManager;
+use super::entity::{Entity, EntityManager, MIN_UNUSED};
+
+use super::internal::{
+    Blob,
+    BlockHandle,
+    ComponentOffsetTable,
+    MasterOffsetTable,
+};
 
 use util::work_pool::WorkPool;
 
@@ -55,12 +62,83 @@ unsafe impl Allocator for WorldAllocator {
 struct State<C: Components> {
     components: C,
     entities: EntityManager,
+    blob: Blob,
+    offsets: MasterOffsetTable,
+    dead_entities: Vector<Entity, WorldAllocator>,
     alloc: WorldAllocator,
+}
+
+impl<C: Components> State<C> {
+    fn next_entity(&mut self) -> Entity {
+        self.entities.next_entity()
+    }
+    
+    fn destroy_entity(&mut self, e: Entity) {
+        if !self.is_alive(e) { return }
+        
+        unsafe { self.entities.destroy_entity(e) }
+        self.dead_entities.push(e);
+        self.offsets.remove(e);
+        
+        
+        // cache dead entities until their index can possibly be recycled.
+        // then have each component offset table clear them all at once,
+        // minimizing cache misses for the batch.
+        if self.dead_entities.len() > MIN_UNUSED {
+            self.components.clear_components_for(&self.dead_entities[..]);
+            self.dead_entities.clear(); // reset the vector.
+        }
+    }
+    
+    fn destroy_entities<I>(&mut self, entities: I) where I: IntoIterator<Item=Entity> {
+        for e in entities {
+            self.destroy_entity(e);
+        }
+    }
+    
+    fn has_component<T: Component>(&self, e: Entity) -> bool {
+        self.is_alive(e) && 
+        self.components.get::<T>().offset_of(e).is_some()
+    }
+    
+    fn is_alive(&self, e: Entity) -> bool {
+        self.entities.is_alive(e)
+    }
+    
+    fn get_component<T: Component>(&self, e: Entity) -> Option<&T> {
+        use std::mem;
+        
+        self.offsets.offset_of(e).and_then(|(gran, index)| {
+            // We store offsets only for blocks which we can get handles for.
+            let block = self.blob.get_block(gran, index).expect("Could not get handle for stored block.");
+            self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
+                mem::transmute::<*mut T, &T>(
+                    block.data_ptr().offset(comp_offset as isize) as *mut T)
+            })
+        })
+    }
+    
+    fn get_mut_component<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
+        use std::mem;
+        
+        self.offsets.offset_of(e).and_then(|(gran, index)| {
+            // We store offsets only for blocks which we can get handles for.
+            let block = self.blob.get_block(gran, index).expect("Could not get handle for stored block.");
+            self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
+                mem::transmute::<*mut T, &mut T>(
+                    block.data_ptr().offset(comp_offset as isize) as *mut T)
+            })
+        })
+    }
 }
 
 pub struct World<C: Components> {
 	state: RwLock<State<C>>,
     pool: WorkPool,
+}
+
+impl<C: Components> World<C> {
+    // most of the methods from state using RwLock::get_mut() plus a few world-specific ones.
 }
 
 /// Used to build a world with the given components.
@@ -105,6 +183,9 @@ impl<T: PhantomComponents> WorldBuilder<T> {
         let state = State {
             components: components,
             entities: EntityManager::new(alloc),
+            blob: Blob::new(alloc),
+            offsets: MasterOffsetTable::new(alloc),
+            dead_entities: Vector::with_alloc_and_capacity(alloc, MIN_UNUSED),
             alloc: alloc,
         };
         

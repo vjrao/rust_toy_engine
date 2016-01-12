@@ -21,7 +21,7 @@ const INITIAL_CAPACITY: usize = 512;
 
 #[derive(Clone, Copy, PartialEq)]
 // What granularity an entity's data is.
-enum Granularity {
+pub enum Granularity {
     Small,
     Medium,
     Large, 

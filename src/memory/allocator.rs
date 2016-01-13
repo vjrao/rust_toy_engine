@@ -48,10 +48,6 @@ pub struct Kind {
     // alignment of the requested block of memory, measured in bytes.
     // we ensure that this is always a power-of-two, because API's
     ///like `posix_memalign` require it and it is a reasonable
-    // constraint to impose on Kind constructors.
-    //
-    // (However, we do not analogously require `align >= sizeof(void*)`,
-    //  even though that is *also* a requirement of `posix_memalign`.)
     align: Alignment,
 }
 
@@ -63,23 +59,40 @@ pub struct Kind {
 impl Kind {
     // (private constructor)
     fn from_size_align(size: usize, align: usize) -> Kind {
-        assert!(align.is_power_of_two()); 
-        let size = unsafe { assert!(size > 0); NonZero::new(size) };
-        let align = unsafe { assert!(align > 0); NonZero::new(align) };
-        Kind { size: size, align: align }
+        assert!(align.is_power_of_two());
+        let size = unsafe {
+            assert!(size > 0);
+            NonZero::new(size)
+        };
+        let align = unsafe {
+            assert!(align > 0);
+            NonZero::new(align)
+        };
+        Kind {
+            size: size,
+            align: align,
+        }
     }
 
     /// The minimum size in bytes for a memory block of this kind.
-    pub fn size(&self) -> NonZero<usize> { self.size }
+    pub fn size(&self) -> NonZero<usize> {
+        self.size
+    }
 
     /// The minimum byte alignment for a memory block of this kind.
-    pub fn align(&self) -> NonZero<usize> { self.align }
+    pub fn align(&self) -> NonZero<usize> {
+        self.align
+    }
 
     /// Constructs a `Kind` suitable for holding a value of type `T`.
     /// Returns `None` if no such kind exists (e.g. for zero-sized `T`).
     pub fn new<T>() -> Option<Self> {
         let (size, align) = size_align::<T>();
-        if size > 0 { Some(Kind::from_size_align(size, align)) } else { None }
+        if size > 0 {
+            Some(Kind::from_size_align(size, align))
+        } else {
+            None
+        }
     }
 
     /// Produces kind describing a record that could be used to
@@ -112,8 +125,7 @@ impl Kind {
         if align > self.align {
             let pow2_align = align.checked_next_power_of_two().unwrap();
             debug_assert!(pow2_align > 0); // (this follows from self.align > 0...)
-            Kind { align: unsafe { NonZero::new(pow2_align) },
-                   ..*self }
+            Kind { align: unsafe { NonZero::new(pow2_align) }, ..*self }
         } else {
             *self
         }
@@ -146,7 +158,9 @@ impl Kind {
     ///
     /// On zero `n` or arithmetic overflow, returns `None`.
     pub fn repeat(&self, n: usize) -> Option<(Self, usize)> {
-        if n == 0 { return None; }
+        if n == 0 {
+            return None;
+        }
         let padded_size = match self.size.checked_add(self.padding_needed_for(self.align)) {
             None => return None,
             Some(padded_size) => padded_size,
@@ -187,8 +201,14 @@ impl Kind {
             None => return None,
             Some(scaled) => scaled,
         };
-        let size = unsafe { assert!(scaled > 0); NonZero::new(scaled) };
-        Some(Kind { size: size, align: self.align })
+        let size = unsafe {
+            assert!(scaled > 0);
+            NonZero::new(scaled)
+        };
+        Some(Kind {
+            size: size,
+            align: self.align,
+        })
     }
 
     /// Creates a kind describing the record for `self` followed by
@@ -219,10 +239,8 @@ impl Kind {
     // post-validated in some manner. (The implementations here
     ///do indirectly validate, but that is not part of their
     /// specification.)
-    //
     // Since invalid inputs could yield ill-formed kinds, these
     // methods are `unsafe`.
-
     /// Creates kind describing the record for a single instance of `T`.
     /// Requires `T` has non-zero size.
     pub unsafe fn new_unchecked<T>() -> Self {
@@ -303,7 +321,6 @@ impl Kind {
     pub fn array_unchecked<T>(n: usize) -> Self {
         Kind::array::<T>(n).unwrap()
     }
-
 }
 
 /// `AllocError` instances provide feedback about the cause of an allocation failure.
@@ -392,15 +409,27 @@ pub enum AllocErr {
 }
 
 impl AllocError for MemoryExhausted {
-    fn invalid_input() -> Self { MemoryExhausted }
-    fn is_memory_exhausted(&self) -> bool { true }
-    fn is_request_unsupported(&self) -> bool { false }
+    fn invalid_input() -> Self {
+        MemoryExhausted
+    }
+    fn is_memory_exhausted(&self) -> bool {
+        true
+    }
+    fn is_request_unsupported(&self) -> bool {
+        false
+    }
 }
 
 impl AllocError for AllocErr {
-    fn invalid_input() -> Self { AllocErr::Unsupported }
-    fn is_memory_exhausted(&self) -> bool { *self == AllocErr::Exhausted }
-    fn is_request_unsupported(&self) -> bool { *self == AllocErr::Unsupported }
+    fn invalid_input() -> Self {
+        AllocErr::Unsupported
+    }
+    fn is_memory_exhausted(&self) -> bool {
+        *self == AllocErr::Exhausted
+    }
+    fn is_request_unsupported(&self) -> bool {
+        *self == AllocErr::Unsupported
+    }
 }
 
 /// An implementation of `Allocator` can allocate, reallocate, and
@@ -436,7 +465,7 @@ pub unsafe trait Allocator {
     /// `MemoryExhausted` type for this.
     type Error: AllocError + fmt::Debug;
 
-        /// Returns a pointer suitable for holding data described by
+    /// Returns a pointer suitable for holding data described by
     /// `kind`, meeting its size and alignment guarantees.
     ///
     /// The returned block of storage may or may not have its contents
@@ -477,7 +506,9 @@ pub unsafe trait Allocator {
     /// instead they should return an appropriate error from the
     /// invoked method, and let the client decide whether to invoke
     /// this `oom` method.
-    unsafe fn oom(&mut self) -> ! { ::core::intrinsics::abort() }
+    unsafe fn oom(&mut self) -> ! {
+        ::core::intrinsics::abort()
+    }
 
     // == ALLOCATOR-SPECIFIC QUANTITIES AND LIMITS ==
     // max_size, max_align, usable_size
@@ -488,7 +519,9 @@ pub unsafe trait Allocator {
     /// Returns `None` if this allocator has no explicit maximum size.
     /// (Note that such allocators may well still have an *implicit*
     /// maximum size; i.e. allocation requests can always fail.)
-    fn max_size(&self) -> Option<Size> { None }
+    fn max_size(&self) -> Option<Size> {
+        None
+    }
 
     /// The maximum requestable alignment in bytes for memory blocks
     /// managed by this allocator.
@@ -497,7 +530,9 @@ pub unsafe trait Allocator {
     /// alignment.  (Note that such allocators may well still have an
     /// *implicit* maximum alignment; i.e. allocation requests can
     /// always fail.)
-    fn max_align(&self) -> Option<Alignment> { None }
+    fn max_align(&self) -> Option<Alignment> {
+        None
+    }
 
     /// Returns bounds on the guaranteed usable size of a successful
     /// allocation created with the specified `kind`.
@@ -529,7 +564,7 @@ pub unsafe trait Allocator {
 
     // == METHODS FOR MEMORY REUSE ==
     // realloc. alloc_excess, realloc_excess
-    
+
     /// Returns a pointer suitable for holding data described by
     /// `new_kind`, meeting its size and alignment guarantees. To
     /// accomplish this, this may extend or shrink the allocation
@@ -570,7 +605,8 @@ pub unsafe trait Allocator {
     unsafe fn realloc(&mut self,
                       ptr: Address,
                       kind: Kind,
-                      new_kind: Kind) -> Result<Address, Self::Error> {
+                      new_kind: Kind)
+                      -> Result<Address, Self::Error> {
         let (min, max) = self.usable_size(kind);
         let s = new_kind.size();
         // All Kind alignments are powers of two, so a comparison
@@ -580,7 +616,9 @@ pub unsafe trait Allocator {
         } else {
             let result = self.alloc(new_kind);
             if let Ok(new_ptr) = result {
-                ptr::copy(*ptr as *const u8, *new_ptr, cmp::min(*kind.size(), *new_kind.size()));
+                ptr::copy(*ptr as *const u8,
+                          *new_ptr,
+                          cmp::min(*kind.size(), *new_kind.size()));
                 if let Err(_) = self.dealloc(ptr, kind) {
                     // all we can do from the realloc abstraction
                     // is either:
@@ -615,14 +653,15 @@ pub unsafe trait Allocator {
     unsafe fn realloc_excess(&mut self,
                              ptr: Address,
                              kind: Kind,
-                             new_kind: Kind) -> Result<Excess, Self::Error> {
+                             new_kind: Kind)
+                             -> Result<Excess, Self::Error> {
         self.realloc(ptr, kind, new_kind)
             .map(|p| Excess(p, self.usable_size(new_kind).1))
     }
-	
+
     // == COMMON USAGE PATTERNS ==
     // alloc_one, dealloc_one, alloc_array, realloc_array. dealloc_array
-    
+
     /// Allocates a block suitable for holding an instance of `T`.
     ///
     /// Captures a common usage pattern for allocators.
@@ -631,7 +670,7 @@ pub unsafe trait Allocator {
     /// `alloc`/`realloc` methods of this allocator.
     unsafe fn alloc_one<T>(&mut self) -> Result<Unique<T>, Self::Error> {
         if let Some(k) = Kind::new::<T>() {
-            self.alloc(k).map(|p|Unique::new(*p as *mut T))
+            self.alloc(k).map(|p| Unique::new(*p as *mut T))
         } else {
             // (only occurs for zero-sized T)
             debug_assert!(mem::size_of::<T>() == 0);
@@ -655,7 +694,7 @@ pub unsafe trait Allocator {
     /// `alloc`/`realloc` methods of this allocator.
     unsafe fn alloc_array<T>(&mut self, n: usize) -> Result<Unique<T>, Self::Error> {
         match Kind::array::<T>(n) {
-            Some(kind) => self.alloc(kind).map(|p|Unique::new(*p as *mut T)),
+            Some(kind) => self.alloc(kind).map(|p| Unique::new(*p as *mut T)),
             None => Err(Self::Error::invalid_input()),
         }
     }
@@ -671,11 +710,12 @@ pub unsafe trait Allocator {
     unsafe fn realloc_array<T>(&mut self,
                                ptr: Unique<T>,
                                n_old: usize,
-                               n_new: usize) -> Result<Unique<T>, Self::Error> {
+                               n_new: usize)
+                               -> Result<Unique<T>, Self::Error> {
         let old_new_ptr = (Kind::array::<T>(n_old), Kind::array::<T>(n_new), *ptr);
         if let (Some(k_old), Some(k_new), ptr) = old_new_ptr {
             self.realloc(NonZero::new(ptr as *mut u8), k_old, k_new)
-                .map(|p|Unique::new(*p as *mut T))
+                .map(|p| Unique::new(*p as *mut T))
         } else {
             Err(Self::Error::invalid_input())
         }
@@ -725,7 +765,7 @@ pub unsafe trait Allocator {
     /// `new_kind`, meeting its size and alignment guarantees. To
     /// accomplish this, may extend or shrink the allocation
     /// referenced by `ptr` to fit `new_kind`.
-    ////
+    /// /
     /// (In other words, ownership of the memory block associated with
     /// `ptr` is first transferred back to this allocator, but the
     /// same block may or may not be transferred back as the result of
@@ -751,7 +791,8 @@ pub unsafe trait Allocator {
     unsafe fn realloc_unchecked(&mut self,
                                 ptr: Address,
                                 kind: Kind,
-                                new_kind: Kind) -> Option<Address> {
+                                new_kind: Kind)
+                                -> Option<Address> {
         // (default implementation carries checks, but impl's are free to omit them.)
         self.realloc(ptr, kind, new_kind).ok()
     }
@@ -767,7 +808,8 @@ pub unsafe trait Allocator {
     unsafe fn realloc_excess_unchecked(&mut self,
                                        ptr: Address,
                                        kind: Kind,
-                                       new_kind: Kind) -> Option<Excess> {
+                                       new_kind: Kind)
+                                       -> Option<Excess> {
         self.realloc_excess(ptr, kind, new_kind).ok()
     }
 
@@ -781,7 +823,7 @@ pub unsafe trait Allocator {
     /// undefined behavior.
     unsafe fn alloc_array_unchecked<T>(&mut self, n: usize) -> Option<Unique<T>> {
         let kind = Kind::array_unchecked::<T>(n);
-        self.alloc_unchecked(kind).map(|p|Unique::new(*p as *mut T))
+        self.alloc_unchecked(kind).map(|p| Unique::new(*p as *mut T))
     }
 
     /// Reallocates a block suitable for holding `n_old` instances of `T`,
@@ -795,12 +837,13 @@ pub unsafe trait Allocator {
     unsafe fn realloc_array_unchecked<T>(&mut self,
                                          ptr: Unique<T>,
                                          n_old: usize,
-                                         n_new: usize) -> Option<Unique<T>> {
+                                         n_new: usize)
+                                         -> Option<Unique<T>> {
         let (k_old, k_new, ptr) = (Kind::array_unchecked::<T>(n_old),
                                    Kind::array_unchecked::<T>(n_new),
                                    *ptr);
         self.realloc_unchecked(NonZero::new(ptr as *mut u8), k_old, k_new)
-            .map(|p|Unique::new(*p as *mut T))
+            .map(|p| Unique::new(*p as *mut T))
     }
 
     /// Deallocates a block suitable for holding `n` instances of `T`.
@@ -823,7 +866,7 @@ pub struct DefaultAllocator;
 
 unsafe impl Allocator for DefaultAllocator {
     type Error = MemoryExhausted;
-    
+
     #[inline]
     unsafe fn alloc(&mut self, kind: Kind) -> Result<Address, Self::Error> {
         let ptr = heap::allocate(*kind.size(), *kind.align());
@@ -833,15 +876,19 @@ unsafe impl Allocator for DefaultAllocator {
             Err(MemoryExhausted)
         }
     }
-    
+
     #[inline]
     unsafe fn dealloc(&mut self, ptr: Address, kind: Kind) -> Result<(), Self::Error> {
         heap::deallocate(*ptr, *kind.size(), *kind.align());
         Ok(())
     }
-    
+
     #[inline]
-    unsafe fn realloc(&mut self, ptr: Address, kind: Kind, new_kind: Kind) -> Result<Address, Self::Error> {
+    unsafe fn realloc(&mut self,
+                      ptr: Address,
+                      kind: Kind,
+                      new_kind: Kind)
+                      -> Result<Address, Self::Error> {
         let p = heap::reallocate(*ptr, *kind.size(), *new_kind.size(), *new_kind.align());
         if !p.is_null() {
             Ok(NonZero::new(p))
@@ -849,7 +896,7 @@ unsafe impl Allocator for DefaultAllocator {
             Err(MemoryExhausted)
         }
     }
-    
+
     #[inline]
     unsafe fn usable_size(&self, kind: Kind) -> (Capacity, Capacity) {
         let usable = NonZero::new(heap::usable_size(*kind.size(), *kind.align()));

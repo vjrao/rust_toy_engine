@@ -28,22 +28,24 @@ impl<T: Any + Send + Sync> Component for T {}
 // will be done here.
 fn assert_component_compliance<T: Component>() {
     use std::mem;
-    
-    assert!(mem::align_of::<T>() <= COMPONENT_ALIGN, 
-        "Component alignment too large. Maximum supported is {} bytes.", COMPONENT_ALIGN);
-        
-    assert!(mem::size_of::<T>() <= LARGE_SIZE, 
-        "Component size too large. Maximum supported is {} bytes.", LARGE_SIZE);
+
+    assert!(mem::align_of::<T>() <= COMPONENT_ALIGN,
+            "Component alignment too large. Maximum supported is {} bytes.",
+            COMPONENT_ALIGN);
+
+    assert!(mem::size_of::<T>() <= LARGE_SIZE,
+            "Component size too large. Maximum supported is {} bytes.",
+            LARGE_SIZE);
 }
 
-/////////////////////////////////////////////////////
-///// Type-level component lists ////////////////////
-/////////////////////////////////////////////////////
+/// //////////////////////////////////////////////////
+/// // Type-level component lists ////////////////////
+/// //////////////////////////////////////////////////
 
 /// Non-empty case of a list entry.
 pub struct ListEntry<T: Any, P> {
-	val: T,
-	parent: P,
+    val: T,
+    parent: P,
 }
 
 /// Empty case of a list entry.
@@ -59,45 +61,51 @@ pub fn make_empty() -> Empty {
 // the offset tables themselves.
 pub trait PhantomComponents {
     type Components: Components;
-	// Push another component type onto this list. This additionally verifies
-	// that no duplicates are pushed.
-	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> where Self: Sized;
-	fn has<T: Component>(&self) -> bool;
+    // Push another component type onto this list. This additionally verifies
+    // that no duplicates are pushed.
+    fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> where Self: Sized;
+    fn has<T: Component>(&self) -> bool;
     fn into_components(self, alloc: WorldAllocator) -> Self::Components;
 }
 
 impl PhantomComponents for Empty {
     type Components = Empty;
-    
-	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Empty> {
+
+    fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Empty> {
         assert_component_compliance::<T>();
-		ListEntry {
-			val: PhantomData,
-			parent: self,
-		}
-	}
-	
-	fn has<T: Component>(&self) -> bool { false }
-    fn into_components(self, _: WorldAllocator) -> Empty { make_empty() }
+        ListEntry {
+            val: PhantomData,
+            parent: self,
+        }
+    }
+
+    fn has<T: Component>(&self) -> bool {
+        false
+    }
+    fn into_components(self, _: WorldAllocator) -> Empty {
+        make_empty()
+    }
 }
 
 impl<C: Component, P: PhantomComponents> PhantomComponents for ListEntry<PhantomData<C>, P> {
     type Components = ListEntry<ComponentOffsetTable<C>, P::Components>;
-    
-	fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> {
-		if self.has::<T>() { panic!("Added type to components list twice.") }
+
+    fn push<T: Component>(self) -> ListEntry<PhantomData<T>, Self> {
+        if self.has::<T>() {
+            panic!("Added type to components list twice.")
+        }
         assert_component_compliance::<T>();
-		
-		ListEntry {
-			val: PhantomData,
-			parent: self,
-		}
-	}
-	
-	fn has<T: Component>(&self) -> bool {
-		(TypeId::of::<T>() == TypeId::of::<C>()) || self.parent.has::<T>()
-	}
-    
+
+        ListEntry {
+            val: PhantomData,
+            parent: self,
+        }
+    }
+
+    fn has<T: Component>(&self) -> bool {
+        (TypeId::of::<T>() == TypeId::of::<C>()) || self.parent.has::<T>()
+    }
+
     fn into_components(self, alloc: WorldAllocator) -> Self::Components {
         ListEntry {
             val: ComponentOffsetTable::new(alloc),
@@ -108,14 +116,14 @@ impl<C: Component, P: PhantomComponents> PhantomComponents for ListEntry<Phantom
 
 // A list where each entry is an offset table for that component.
 pub trait Components {
-	// Get a reference to the offset table for the given component type.
+    // Get a reference to the offset table for the given component type.
     // This panics if the component type is not present in this list.
-	fn get<T: Component>(&self) -> &ComponentOffsetTable<T>;
-    
+    fn get<T: Component>(&self) -> &ComponentOffsetTable<T>;
+
     // Get a mutable reference to the offset table for the given component type.
     // This panics if the component type is not present in this list.
-	fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T>;
-    
+    fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T>;
+
     // Remove all component offsets from each entity in the slice.
     // we batch this because each component offset table may be located
     // somewhere else in memory, so we try to minimize cache misses.
@@ -123,60 +131,56 @@ pub trait Components {
 }
 
 impl Components for Empty {
-	fn get<T: Component>(&self) -> &ComponentOffsetTable<T> {
+    fn get<T: Component>(&self) -> &ComponentOffsetTable<T> {
         panic!("No such component in tables list.");
     }
-    
+
     fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T> {
         panic!("No such component in tables list.");
     }
-    
+
     fn clear_components_for(&mut self, _: &[Entity]) {}
 }
 
 impl<C: Component, P: Components> Components for ListEntry<ComponentOffsetTable<C>, P> {
-	fn get<T: Component>(&self) -> &ComponentOffsetTable<T> {
+    fn get<T: Component>(&self) -> &ComponentOffsetTable<T> {
         // TypeIds should have resolved to concrete values by the optimization phase.
-        // My guess is that every monomorphization of this function will be inlined into 
+        // My guess is that every monomorphization of this function will be inlined into
         // a large if-else tree, which will then be optimized down to a single return or panic.
-		if TypeId::of::<T>() == TypeId::of::<C>() {
-			unsafe { 
-				mem::transmute(&self.val)
-			}
-		} else {
-			self.parent.get()
-		}
-	}
-    
+        if TypeId::of::<T>() == TypeId::of::<C>() {
+            unsafe { mem::transmute(&self.val) }
+        } else {
+            self.parent.get()
+        }
+    }
+
     fn get_mut<T: Component>(&mut self) -> &mut ComponentOffsetTable<T> {
-		if TypeId::of::<T>() == TypeId::of::<C>() {
-			unsafe { 
-				mem::transmute(&mut self.val)
-			}
-		} else {
-			self.parent.get_mut()
-		}
-	}
-    
-    fn clear_components_for(&mut self, entities: &[Entity]){
+        if TypeId::of::<T>() == TypeId::of::<C>() {
+            unsafe { mem::transmute(&mut self.val) }
+        } else {
+            self.parent.get_mut()
+        }
+    }
+
+    fn clear_components_for(&mut self, entities: &[Entity]) {
         for entity in entities.iter() {
             self.val.remove(*entity);
         }
-        
+
         self.parent.clear_components_for(entities);
     }
 }
 
 
 #[cfg(test)]
-mod tests {    
+mod tests {
     use super::*;
-    
+
     struct A;
     struct B;
     struct C;
     struct D;
-    
+
     #[test]
     #[should_panic]
     fn push_twice() {

@@ -1,7 +1,7 @@
 //! A vector generic over its allocator.
-//! Much of the documentation here is insufficient, as copying it 
+//! Much of the documentation here is insufficient, as copying it
 //! from the standard library docs proved too great a task for me.
-//! I would advise viewers of this page to see the 
+//! I would advise viewers of this page to see the
 //! (docs for std::vec)[doc.rust-lang.org/stable/std/vec/]
 
 use alloc::heap;
@@ -21,93 +21,95 @@ use super::raw_vec::RawVec;
 
 /// A vector manages a contiguous block of memory housing some number
 /// of elements. It will dynamically resize itself as it grows.
-pub struct Vector<T, A=DefaultAllocator> where A: Allocator {
-	buf: RawVec<T, A>,
-	len: usize,
+pub struct Vector<T, A = DefaultAllocator>
+    where A: Allocator
+{
+    buf: RawVec<T, A>,
+    len: usize,
 }
 
 impl<T> Vector<T, DefaultAllocator> {
-	/// Create the largest `Vector` possible which does not allocate, backed by the default allocator.
-	/// If T has a non-zero size, this will create a vector with 0 capacity.
-	/// If T has size zero, this will create a vector with usize::MAX capacity.
-	pub fn new() -> Self {
-		Vector::with_alloc(DefaultAllocator)
-	}
-	
-	/// Create a new `Vector` with capacity for `n` elements, backed by the default allocator.
-	pub fn with_capacity(n: usize) -> Self {
-		Vector::with_alloc_and_capacity(DefaultAllocator, n)
-	}
+    /// Create the largest `Vector` possible which does not allocate, backed by the default allocator.
+    /// If T has a non-zero size, this will create a vector with 0 capacity.
+    /// If T has size zero, this will create a vector with usize::MAX capacity.
+    pub fn new() -> Self {
+        Vector::with_alloc(DefaultAllocator)
+    }
+
+    /// Create a new `Vector` with capacity for `n` elements, backed by the default allocator.
+    pub fn with_capacity(n: usize) -> Self {
+        Vector::with_alloc_and_capacity(DefaultAllocator, n)
+    }
 }
 
 impl<T, A: Allocator> Vector<T, A> {
-	/// Create a new `Vector` which will draw memory from the supplied allocator.
-	pub fn with_alloc(alloc: A) -> Self {
-		Vector {
-			buf: RawVec::with_alloc(alloc),
-			len: 0,
-		}
-	}
-	
-	/// Create a new `Vector` with initial capacity `n`, backed by the supplied allocator.
-	pub fn with_alloc_and_capacity(alloc: A, n: usize) -> Self {
-		Vector {
-			buf: RawVec::with_alloc_and_capacity(alloc, n),
-			len: 0,
-		}
-	}
-	
-	/// Get the length of the `Vector`
-	pub fn len(&self) -> usize {
-		self.len
-	}
-	
-	/// Gets the capacity of the `Vector`. This is not the same as the length.
-	pub fn capacity(&self) -> usize {
-		self.buf.cap()
-	}
-	
-	/// Reserve enough space for `n` additional elements.
-	/// This may over-allocate for efficiency.
-	pub fn reserve(&mut self, n: usize) {
-		self.buf.reserve(self.len, n);
-	}
-	
-	/// Reserve space for exactly `n` additional elements.
-	pub fn reserve_exact(&mut self, n: usize) {
-		self.buf.reserve_exact(self.len, n);
-	}
-	
-	/// Shrinks the capacity of the vector as much as possible.
-	pub fn shrink_to_fit(&mut self) {
-		self.buf.shrink_to_fit(self.len);
-	}
-	
-	pub fn into_boxed_slice(mut self) -> AllocBox<[T], A> {
-		unsafe {
-			self.shrink_to_fit();
-			let buf = ptr::read(&self.buf);
-			mem::forget(self);
-			
-			buf.into_box()
-		}
-	}
-	
-	/// Push an element onto the vector.
-	pub fn push(&mut self, val: T) {
-		let len = self.len();
-		if len == self.capacity() {
-			self.buf.double();
-		}
-		
-		unsafe {
-			let end = self.buf.ptr().offset(len as isize);
-			ptr::write(end, val);
-			self.len += 1;
-		}
-	}
-	
-	/// Pop an element from the vector.
+    /// Create a new `Vector` which will draw memory from the supplied allocator.
+    pub fn with_alloc(alloc: A) -> Self {
+        Vector {
+            buf: RawVec::with_alloc(alloc),
+            len: 0,
+        }
+    }
+
+    /// Create a new `Vector` with initial capacity `n`, backed by the supplied allocator.
+    pub fn with_alloc_and_capacity(alloc: A, n: usize) -> Self {
+        Vector {
+            buf: RawVec::with_alloc_and_capacity(alloc, n),
+            len: 0,
+        }
+    }
+
+    /// Get the length of the `Vector`
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Gets the capacity of the `Vector`. This is not the same as the length.
+    pub fn capacity(&self) -> usize {
+        self.buf.cap()
+    }
+
+    /// Reserve enough space for `n` additional elements.
+    /// This may over-allocate for efficiency.
+    pub fn reserve(&mut self, n: usize) {
+        self.buf.reserve(self.len, n);
+    }
+
+    /// Reserve space for exactly `n` additional elements.
+    pub fn reserve_exact(&mut self, n: usize) {
+        self.buf.reserve_exact(self.len, n);
+    }
+
+    /// Shrinks the capacity of the vector as much as possible.
+    pub fn shrink_to_fit(&mut self) {
+        self.buf.shrink_to_fit(self.len);
+    }
+
+    pub fn into_boxed_slice(mut self) -> AllocBox<[T], A> {
+        unsafe {
+            self.shrink_to_fit();
+            let buf = ptr::read(&self.buf);
+            mem::forget(self);
+
+            buf.into_box()
+        }
+    }
+
+    /// Push an element onto the vector.
+    pub fn push(&mut self, val: T) {
+        let len = self.len();
+        if len == self.capacity() {
+            self.buf.double();
+        }
+
+        unsafe {
+            let end = self.buf.ptr().offset(len as isize);
+            ptr::write(end, val);
+            self.len += 1;
+        }
+    }
+
+    /// Pop an element from the vector.
     pub fn pop(&mut self) -> Option<T> {
         if self.len == 0 {
             None
@@ -118,22 +120,25 @@ impl<T, A: Allocator> Vector<T, A> {
             }
         }
     }
-	
-	/// Sets the length of the vector unsafely.
-	pub unsafe fn set_len(&mut self, len: usize) {
+
+    /// Sets the length of the vector unsafely.
+    pub unsafe fn set_len(&mut self, len: usize) {
         self.len = len;
     }
-	
-	/// Insert an element at the designated index.
-	/// Panics on out-of-bounds.
-	pub fn insert(&mut self, index: usize, element: T) {
+
+    /// Insert an element at the designated index.
+    /// Panics on out-of-bounds.
+    pub fn insert(&mut self, index: usize, element: T) {
         let len = self.len();
         assert!(index <= len);
 
         // space for the new element
-        if len == self.buf.cap() { self.buf.double(); }
+        if len == self.buf.cap() {
+            self.buf.double();
+        }
 
-        unsafe { // infallible
+        unsafe {
+            // infallible
             // The spot to put the new value
             {
                 let p = self.as_mut_ptr().offset(index as isize);
@@ -147,13 +152,14 @@ impl<T, A: Allocator> Vector<T, A> {
             self.set_len(len + 1);
         }
     }
-	
-	/// Remove the element at the designated index.
-	/// Panics on out-of-bounds.
-	pub fn remove(&mut self, index: usize) -> T {
+
+    /// Remove the element at the designated index.
+    /// Panics on out-of-bounds.
+    pub fn remove(&mut self, index: usize) -> T {
         let len = self.len();
         assert!(index < len);
-        unsafe { // infallible
+        unsafe {
+            // infallible
             let ret;
             {
                 // the place we are taking from.
@@ -169,9 +175,9 @@ impl<T, A: Allocator> Vector<T, A> {
             ret
         }
     }
-	
-	/// Truncates the vector to the given amount of elements
-	pub fn truncate(&mut self, len: usize) {
+
+    /// Truncates the vector to the given amount of elements
+    pub fn truncate(&mut self, len: usize) {
         unsafe {
             // drop any extra elements
             while len < self.len {
@@ -182,67 +188,73 @@ impl<T, A: Allocator> Vector<T, A> {
             }
         }
     }
-	
-	/// Clears all elements in the vector.
-	pub fn clear(&mut self) {
-		self.truncate(0);
-	}
+
+    /// Clears all elements in the vector.
+    pub fn clear(&mut self) {
+        self.truncate(0);
+    }
 }
 
 impl<T, A: Allocator> Deref for Vector<T, A> {
-	type Target = [T];
-	
-	fn deref(&self) -> &[T] {
-		let p = self.buf.ptr();
-		unsafe { slice::from_raw_parts(p, self.len) }
-	}
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        let p = self.buf.ptr();
+        unsafe { slice::from_raw_parts(p, self.len) }
+    }
 }
 
 impl<T, A: Allocator> DerefMut for Vector<T, A> {
-	fn deref_mut(&mut self) -> &mut [T] {
-		let p = self.buf.ptr();
-		unsafe { slice::from_raw_parts_mut(p, self.len) }
-	}
+    fn deref_mut(&mut self) -> &mut [T] {
+        let p = self.buf.ptr();
+        unsafe { slice::from_raw_parts_mut(p, self.len) }
+    }
 }
 
 impl<T: Clone, A: Allocator + Clone> Clone for Vector<T, A> {
-	fn clone(&self) -> Self {
-		let alloc = self.buf.clone_alloc();
-		
-		let mut v = Vector::with_alloc_and_capacity(alloc, self.capacity());
-		for x in self.iter() { v.push(x.clone()) }
-		
-		v
-	}
+    fn clone(&self) -> Self {
+        let alloc = self.buf.clone_alloc();
+
+        let mut v = Vector::with_alloc_and_capacity(alloc, self.capacity());
+        for x in self.iter() {
+            v.push(x.clone())
+        }
+
+        v
+    }
 }
 
 // Iterators
 impl<T, A: Allocator + Default> FromIterator<T> for Vector<T, A> {
-    fn from_iter<I: IntoIterator<Item=T>>(iterable: I) -> Self {
+    fn from_iter<I: IntoIterator<Item = T>>(iterable: I) -> Self {
         let iter = iterable.into_iter();
         let (lower, _) = iter.size_hint();
-        
+
         let mut v = Vector::with_alloc_and_capacity(Default::default(), lower);
-        for x in iter { v.push(x) }
-        
+        for x in iter {
+            v.push(x)
+        }
+
         v
     }
 }
 
 /// An iterator for a `Vector`
-pub struct IntoIter<T, A=DefaultAllocator> where A: Allocator {
-	_buf: RawVec<T, A>,
-	ptr: *const T,
-	end: *const T,
+pub struct IntoIter<T, A = DefaultAllocator>
+    where A: Allocator
+{
+    _buf: RawVec<T, A>,
+    ptr: *const T,
+    end: *const T,
 }
 
 unsafe impl<T: Send, A: Allocator + Send> Send for IntoIter<T, A> {}
 unsafe impl<T: Sync, A: Allocator + Sync> Sync for IntoIter<T, A> {}
 
 impl<T, A: Allocator> Iterator for IntoIter<T, A> {
-	type Item = T;
-	
-	
+    type Item = T;
+
+
     #[inline]
     fn next(&mut self) -> Option<T> {
         unsafe {
@@ -273,10 +285,10 @@ impl<T, A: Allocator> Iterator for IntoIter<T, A> {
         let size = mem::size_of::<T>();
         let exact = diff /
                     (if size == 0 {
-                         1
-                     } else {
-                         size
-                     });
+            1
+        } else {
+            size
+        });
         (exact, Some(exact))
     }
 
@@ -323,29 +335,29 @@ impl<T, A: Allocator> Drop for IntoIter<T, A> {
 }
 
 impl<'a, T, A: Allocator> IntoIterator for &'a Vector<T, A> {
-	type Item = &'a T;
+    type Item = &'a T;
 	type IntoIter = slice::Iter<'a, T>;
-	
-	fn into_iter(self) -> slice::Iter<'a, T> {
-		self.iter()
-	}
+
+    fn into_iter(self) -> slice::Iter<'a, T> {
+        self.iter()
+    }
 }
 
 impl<'a, T, A: Allocator> IntoIterator for &'a mut Vector<T, A> {
-	type Item = &'a mut T;
+    type Item = &'a mut T;
 	type IntoIter = slice::IterMut<'a, T>;
-	
-	fn into_iter(self) -> slice::IterMut<'a, T> {
-		self.iter_mut()
-	}
+
+    fn into_iter(self) -> slice::IterMut<'a, T> {
+        self.iter_mut()
+    }
 }
 
 
 impl<T, A: Allocator> IntoIterator for Vector<T, A> {
-	type Item = T;
+    type Item = T;
 	type IntoIter = IntoIter<T, A>;
-	
-	#[inline]
+
+    #[inline]
     fn into_iter(self) -> IntoIter<T, A> {
         unsafe {
             let ptr = self.buf.ptr();
@@ -367,17 +379,19 @@ impl<T, A: Allocator> IntoIterator for Vector<T, A> {
 }
 
 impl<T, A: Allocator> Drop for Vector<T, A> {
-	fn drop(&mut self) {
-		// I think this checks if it's been dropped already?
-		if !self.buf.unsafe_no_drop_flag_needs_drop() { return; }
-		unsafe {
-			if intrinsics::needs_drop::<T>() {
-				for x in self.iter_mut() {
-					// The same could more or less be accomplished
-					// by mem::replacing it with mem::unitialized().
-					intrinsics::drop_in_place(x);
-				}
-			}
-		}
-	}
+    fn drop(&mut self) {
+        // I think this checks if it's been dropped already?
+        if !self.buf.unsafe_no_drop_flag_needs_drop() {
+            return;
+        }
+        unsafe {
+            if intrinsics::needs_drop::<T>() {
+                for x in self.iter_mut() {
+                    // The same could more or less be accomplished
+                    // by mem::replacing it with mem::unitialized().
+                    intrinsics::drop_in_place(x);
+                }
+            }
+        }
+    }
 }

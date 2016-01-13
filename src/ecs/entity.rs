@@ -35,9 +35,7 @@ impl Entity {
         // if index > 2^INDEX_BITS, we're in trouble.
         assert!(index < (1 << INDEX_BITS));
         let id = (gen as u32).wrapping_shl(INDEX_BITS as u32) + index;
-        Entity {
-            id: id
-        }
+        Entity { id: id }
     }
 }
 
@@ -46,7 +44,7 @@ pub fn index_of(e: Entity) -> u32 {
 }
 
 pub fn generation_of(e: Entity) -> u8 {
-        ((e.id >> INDEX_BITS) & GEN_MASK) as u8
+    ((e.id >> INDEX_BITS) & GEN_MASK) as u8
 }
 
 type GenVec = Vector<u8, WorldAllocator>;
@@ -67,7 +65,7 @@ impl EntityManager {
             unused: Unused::with_alloc_and_capacity(alloc, MIN_UNUSED + 1),
         }
     }
-    
+
     /// Creates an entity.
     pub fn next_entity(&mut self) -> Entity {
         if self.unused.len() <= MIN_UNUSED {
@@ -83,10 +81,16 @@ impl EntityManager {
     /// Whether an entity is currently "alive", or exists.
     #[inline]
     pub fn is_alive(&self, e: Entity) -> bool {
-        self.generation.get(index_of(e) as usize).and_then(|gen| {
-            if *gen == generation_of(e) { Some(()) }
-            else { None }
-        }).is_some()
+        self.generation
+            .get(index_of(e) as usize)
+            .and_then(|gen| {
+                if *gen == generation_of(e) {
+                    Some(())
+                } else {
+                    None
+                }
+            })
+            .is_some()
     }
 
     /// Destroy an entity. THe entity must be alive when this 
@@ -97,7 +101,7 @@ impl EntityManager {
         self.generation[idx as usize].wrapping_add(1);
         self.unused.push_back(idx);
     }
-    
+
     /// Get an upper bound on the number of entities which could be live.
     pub fn size_hint(&self) -> usize {
         self.generation.len()

@@ -39,48 +39,50 @@ impl Granularity {
 
 // Metadata about a slab.
 struct SlabMetadata {
-    block_tracker: Vector<bool, WorldAllocator>,
+    // list of free blocks, in reverse-sorted order.
+    block_tracker: Vector<usize, WorldAllocator>,
     offset: usize,
 }
 
 impl SlabMetadata {
-    fn resize_to(&mut self, size: usize) {
-        while self.block_tracker.len() < size {
-            self.block_tracker.push(false);
+    fn resize_to(&mut self, new_size: usize) {
+        let cur_size = self.block_tracker.capacity();
+        
+        for idx in (cur_size..new_size).rev() {
+            self.block_tracker.push(idx);
         }
     }
     
     // gets the index of the next free block and marks it used.
     fn next_block(&mut self) -> Option<usize> {
-        for (idx, flag) in self.block_tracker.iter_mut().enumerate() {
-            if !*flag {
-                *flag = true;
-                return Some(idx);
-            }
-        }
-        
-        None
+        self.block_tracker.pop()
     }
     
-    // Acquire a known-free block. Panics if not actually free or out-of-bounds.
-    fn acquire_block(&mut self, idx: usize) {
-        let flag = self.block_tracker.get_mut(idx).expect("Attempted to acquire out-of-bounds block");
-        if *flag {
-            panic!("Attempted to acquire used block");
-        } else {
-            *flag = true;
-        }
+    // Acquire a known-free block. Panics if not actually free.
+    unsafe fn acquire_block(&mut self, idx: usize) {
+        // find the index of the block in the free list and then remove it.
+        let tracker_idx = self.search_tracker_for(idx).expect("Attempted to acquire live block.");
+        self.block_tracker.remove(tracker_idx);
     }
     
     // Mark a block to be free.
     unsafe fn mark_free(&mut self, idx: usize) {
-        self.block_tracker[idx] = false;
+        // we shouldn't have found this block, since it isn't supposed to be in the freelist.
+        if let Err(insertion_point) = self.search_tracker_for(idx) {
+            self.block_tracker.insert(insertion_point, idx);
+        }
     }
     
     // whether the block at index `idx` is alive.
-    // panics on out-of-bounds.
     fn is_alive(&self, idx: usize) -> bool {
-        self.block_tracker[idx]
+        self.search_tracker_for(idx).is_err()
+    }
+    
+    #[inline]
+    fn search_tracker_for(&self, idx: usize) -> Result<usize, usize> {
+        self.block_tracker.binary_search_by(|probe| {
+            probe.cmp(&idx).reverse()
+        })
     }
 }
 
@@ -419,10 +421,13 @@ impl Blob {
                 Granularity::Large => !self.large.is_alive(old_num_blocks),
             });
         
-            match granularity {
-                Granularity::Small => self.small.acquire_block(old_num_blocks),
-                Granularity::Medium => self.medium.acquire_block(old_num_blocks),
-                Granularity::Large => self.large.acquire_block(old_num_blocks),
+            // just grew. there's no way those blocks aren't free!
+            unsafe {
+                match granularity {
+                    Granularity::Small => self.small.acquire_block(old_num_blocks),
+                    Granularity::Medium => self.medium.acquire_block(old_num_blocks),
+                    Granularity::Large => self.large.acquire_block(old_num_blocks),
+                }
             }
             
             old_num_blocks
@@ -449,7 +454,7 @@ impl Blob {
     pub fn grow(&mut self) {
         use core::nonzero::NonZero;
         use memory::{Allocator, Kind};
-        
+                
         let new_size = if self.blocks_per_slab == 0 { 
             INITIAL_CAPACITY
         } else {

@@ -55,7 +55,9 @@ use std::slice;
 /// field. This allows zero-sized types to not be special-cased by consumers of
 /// this type.
 #[unsafe_no_drop_flag]
-pub struct RawVec<T, A=DefaultAllocator> where A: Allocator {
+pub struct RawVec<T, A = DefaultAllocator>
+    where A: Allocator
+{
     ptr: Unique<T>,
     cap: usize,
     alloc: A,
@@ -69,7 +71,7 @@ impl<T> RawVec<T, DefaultAllocator> {
     pub fn new() -> Self {
         RawVec::with_alloc(DefaultAllocator)
     }
-    
+
     /// Creates a RawVec with exactly the capacity and alignment requirements
     /// for a `[T; cap]`. This is equivalent to calling RawVec::new when `cap` is 0
     /// or T is zero-sized. Note that if `T` is zero-sized this means you will *not*
@@ -89,7 +91,7 @@ impl<T> RawVec<T, DefaultAllocator> {
     }
 }
 
-impl<T, A: Allocator> RawVec<T, A> {   
+impl<T, A: Allocator> RawVec<T, A> {
     /// Identical to `new`, but using a supplied allocator instead of the default.
     pub fn with_alloc(alloc: A) -> Self {
         unsafe {
@@ -108,7 +110,7 @@ impl<T, A: Allocator> RawVec<T, A> {
             }
         }
     }
-    
+
     /// Identical to `with_capacity`, but also using a supplied allocator instaed of the default.
     pub fn with_alloc_and_capacity(alloc: A, cap: usize) -> Self {
         let mut alloc = alloc;
@@ -117,21 +119,19 @@ impl<T, A: Allocator> RawVec<T, A> {
                 Some(kind) => {
                     alloc_guard(*kind.size());
                     match alloc.alloc(kind) {
-                        Ok(addr) => {
-                            *addr
-                        }
+                        Ok(addr) => *addr,
                         Err(_) => {
                             alloc.oom();
                         }
                     }
                 }
-                
+
                 None => {
                     // ZST or cap is 0.
                     heap::EMPTY as *mut u8
                 }
             };
-            
+
             let cap = if mem::size_of::<T>() == 0 {
                 !0
             } else {
@@ -145,7 +145,6 @@ impl<T, A: Allocator> RawVec<T, A> {
             }
         }
     }
-     
 }
 
 impl<T, A: Allocator> RawVec<T, A> {
@@ -224,7 +223,7 @@ impl<T, A: Allocator> RawVec<T, A> {
                 } else {
                     4
                 };
-                
+
                 let kind = Kind::array::<T>(new_cap).expect("capacity overflow");
                 alloc_guard(*kind.size());
                 match self.alloc.alloc(kind) {
@@ -232,29 +231,25 @@ impl<T, A: Allocator> RawVec<T, A> {
                         self.cap = new_cap;
                         self.ptr = Unique::new(*addr as *mut _);
                     }
-                    
-                    Err(_) => {
-                        self.alloc.oom()
-                    }
+
+                    Err(_) => self.alloc.oom(),
                 }
             } else {
                 // Since we guarantee that we never allocate more than isize::MAX bytes,
                 // `elem_size * self.cap <= isize::MAX` as a precondition, so this can't overflow
                 let new_cap = 2 * self.cap;
-                
+
                 // safe to unwrap this since this request worked previously.
                 let kind = Kind::array::<T>(self.cap).unwrap();
                 alloc_guard(*kind.size());
                 let new_kind = Kind::array::<T>(new_cap).expect("capacity overflow");
-                
-                match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8),
-                                         kind,
-                                         new_kind) {
+
+                match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
                     Ok(addr) => {
                         self.cap = new_cap;
                         self.ptr = Unique::new(*addr as *mut _);
                     }
-                    
+
                     Err(_) => {
                         self.alloc.oom();
                     }                             
@@ -307,7 +302,7 @@ impl<T, A: Allocator> RawVec<T, A> {
                         self.ptr = Unique::new(*addr as *mut _);
                         self.cap = new_cap;
                     }
-                    
+
                     Err(_) => {
                         self.alloc.oom();
                     }
@@ -320,7 +315,7 @@ impl<T, A: Allocator> RawVec<T, A> {
                         self.ptr = Unique::new(*addr as *mut _);
                         self.cap = new_cap;
                     }
-                    
+
                     Err(_) => {
                         self.alloc.oom();
                     }
@@ -397,7 +392,7 @@ impl<T, A: Allocator> RawVec<T, A> {
             let new_cap = cmp::max(double_cap, required_cap);
 
             let new_kind = Kind::array::<T>(new_cap).expect("capacity overflow");
-            
+
             // FIXME: may crash and burn on over-reserve
             alloc_guard(*new_kind.size());
 
@@ -407,7 +402,7 @@ impl<T, A: Allocator> RawVec<T, A> {
                         self.ptr = Unique::new(*addr as *mut _);
                         self.cap = new_cap;
                     }
-                    
+
                     Err(_) => {
                         self.alloc.oom();
                     }
@@ -420,7 +415,7 @@ impl<T, A: Allocator> RawVec<T, A> {
                         self.ptr = Unique::new(*addr as *mut _);
                         self.cap = new_cap;
                     }
-                    
+
                     Err(_) => {
                         self.alloc.oom();
                     }
@@ -450,12 +445,12 @@ impl<T, A: Allocator> RawVec<T, A> {
 
         // This check is my waterloo; it's the only thing Vec wouldn't have to do.
         assert!(self.cap >= amount, "Tried to shrink to a larger capacity");
-        
+
         // This can be unwrapped since the vector is already this large.
         let kind = Kind::array::<T>(self.cap).unwrap();
 
         if amount == 0 {
-            unsafe { 
+            unsafe {
                 let _ = self.alloc.dealloc(NonZero::new(*self.ptr as *mut u8), kind);
                 self.ptr = Unique::new(heap::EMPTY as *mut _);
                 self.cap = 0;
@@ -463,16 +458,16 @@ impl<T, A: Allocator> RawVec<T, A> {
         } else if self.cap != amount {
             unsafe {
                 // Overflow checks are unnecessary as the vector is already at
-                // least this large. We have also already branched at 
+                // least this large. We have also already branched at
                 // elem_size == 0
                 let new_kind = Kind::array::<T>(amount).unwrap();
-                
+
                 match self.alloc.realloc(NonZero::new(*self.ptr as *mut u8), kind, new_kind) {
-                   Ok(addr) => {
+                    Ok(addr) => {
                         self.ptr = Unique::new(*addr as *mut _);
                         self.cap = amount;
                     }
-                    
+
                     Err(_) => {
                         self.alloc.oom();
                     }
@@ -480,15 +475,15 @@ impl<T, A: Allocator> RawVec<T, A> {
             }
         }
     }
-    
+
     /// Convert this into a boxed slice.
     pub fn into_box(self) -> AllocBox<[T], A> {
-        unsafe { 
+        unsafe {
             let slice = slice::from_raw_parts_mut(self.ptr(), self.cap);
             let alloc: A = ptr::read(&self.alloc);
             let output: AllocBox<[T], A> = AllocBox::from_raw_parts(slice, alloc);
             mem::forget(self);
-            
+
             output
         }
     }
@@ -514,7 +509,7 @@ impl<T, A: Allocator> Drop for RawVec<T, A> {
     fn drop(&mut self) {
         let elem_size = mem::size_of::<T>();
         if elem_size != 0 && self.cap != 0 && self.unsafe_no_drop_flag_needs_drop() {
-            
+
             // buffer is already at least this large
             let kind = Kind::array::<T>(self.cap).unwrap();
             unsafe {

@@ -8,9 +8,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Double-ended queue which is generic over its allocator. 
+//! Double-ended queue which is generic over its allocator.
 //!
-//! This is largely a port from the standard library's 
+//! This is largely a port from the standard library's
 //! (`VecDeque`)[http://doc.rust-lang.org/std/collections/struct.VecDeque.html].
 //! Readers of this documentation are advised to read the official documentation for this structure
 //! as it is far more in-depth. This lacks a few features of `VecDeque`, which may be added as desired.
@@ -45,7 +45,9 @@ const MAXIMUM_ZST_CAPACITY: usize = 1 << (64 - 1); // Largest possible power of 
 /// the queue, and `pop_front` to remove from the queue. `extend` and `append`
 /// push onto the back in this manner, and iterating over `VecDeque` goes front
 /// to back.
-pub struct VecDeque<T, A=DefaultAllocator> where A: Allocator {
+pub struct VecDeque<T, A = DefaultAllocator>
+    where A: Allocator
+{
     // tail and head are pointers into the buffer. Tail always points
     // to the first element that could be read, Head always points
     // to where data should be written.
@@ -64,7 +66,9 @@ impl<T, A: Allocator> Drop for VecDeque<T, A> {
     }
 }
 
-impl<T, A> Default for VecDeque<T, A> where A: Allocator + Default {
+impl<T, A> Default for VecDeque<T, A>
+    where A: Allocator + Default
+{
     #[inline]
     fn default() -> VecDeque<T, A> {
         VecDeque::with_alloc(Default::default())
@@ -73,13 +77,13 @@ impl<T, A> Default for VecDeque<T, A> where A: Allocator + Default {
 
 impl<T, A: Allocator> VecDeque<T, A> {
     /// Marginally more convenient
-	#[inline]
+    #[inline]
     fn ptr(&self) -> *mut T {
         self.buf.ptr()
     }
 
     /// Marginally more convenient
-	#[inline]
+    #[inline]
     fn cap(&self) -> usize {
         if mem::size_of::<T>() == 0 {
             // For zero sized types, we are always at maximum capacity
@@ -222,21 +226,20 @@ impl<T> VecDeque<T, DefaultAllocator> {
 
     /// Creates an empty `VecDeque` with space for at least `n` elements.
     pub fn with_capacity(n: usize) -> Self {
-		VecDeque::with_alloc_and_capacity(DefaultAllocator, n)
+        VecDeque::with_alloc_and_capacity(DefaultAllocator, n)
     }
-	
 }
 
 impl<T, A: Allocator> VecDeque<T, A> {
-	/// Create an empty `VecDeque` backed by the given allocator.
-	pub fn with_alloc(alloc: A) -> Self {
-		VecDeque::with_alloc_and_capacity(alloc, INITIAL_CAPACITY)
-	}
-	
-	/// Create an empty `VecDeque` with space for at least `n` elements, 
-	/// backed by the given allocator.
-	pub fn with_alloc_and_capacity(alloc: A, n: usize) -> Self {
-		// +1 since the ringbuffer always leaves one space empty
+    /// Create an empty `VecDeque` backed by the given allocator.
+    pub fn with_alloc(alloc: A) -> Self {
+        VecDeque::with_alloc_and_capacity(alloc, INITIAL_CAPACITY)
+    }
+
+    /// Create an empty `VecDeque` with space for at least `n` elements, 
+    /// backed by the given allocator.
+    pub fn with_alloc_and_capacity(alloc: A, n: usize) -> Self {
+        // +1 since the ringbuffer always leaves one space empty
         let cap = cmp::max(n + 1, MINIMUM_CAPACITY + 1).next_power_of_two();
         assert!(cap > n, "capacity overflow");
 
@@ -245,7 +248,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
             head: 0,
             buf: RawVec::with_alloc_and_capacity(alloc, cap),
         }
-	}
+    }
 
     /// Retrieves an element in the `VecDeque` by index.
     pub fn get(&self, index: usize) -> Option<&T> {
@@ -387,7 +390,7 @@ impl<T, A: Allocator> VecDeque<T, A> {
             debug_assert!(self.cap().count_ones() == 1);
         }
     }
-    
+
     /// Shortens a `VecDeque`, dropping excess elements from the back.
     ///
     /// If `len` is greater than the `VecDeque`'s current length, this has no
@@ -1119,7 +1122,9 @@ impl<'a, T> ExactSizeIterator for IterMut<'a, T> {}
 
 /// A by-value VecDeque iterator
 #[derive(Clone)]
-pub struct IntoIter<T, A=DefaultAllocator> where A: Allocator {
+pub struct IntoIter<T, A = DefaultAllocator>
+    where A: Allocator
+{
     inner: VecDeque<T, A>,
 }
 
@@ -1147,13 +1152,16 @@ impl<T, A: Allocator> DoubleEndedIterator for IntoIter<T, A> {
 
 impl<T, A: Allocator> ExactSizeIterator for IntoIter<T, A> {}
 
-impl<T, A> Clone for VecDeque<T, A> where T: Clone, A: Allocator + Clone {
+impl<T, A> Clone for VecDeque<T, A>
+    where T: Clone,
+          A: Allocator + Clone
+{
     fn clone(&self) -> Self {
         let mut v = VecDeque::with_alloc_and_capacity(self.buf.clone_alloc(), self.len());
         for x in self.iter() {
             v.push_back(x.clone());
         }
-        
+
         v
     }
 }
@@ -1398,13 +1406,13 @@ mod tests {
         let cap = tester.capacity();
         tester.reserve(63);
         let max_cap = tester.capacity();
-        
+
 
         for len in 0..cap + 1 {
             // 0, 1, 2, .., len - 1
             let expected = (0..).take(len).collect();
             for tail_pos in 0..max_cap + 1 {
-                
+
                 tester.tail = tail_pos;
                 tester.head = tail_pos;
                 tester.reserve(63);
@@ -1416,7 +1424,7 @@ mod tests {
                 assert!(tester.tail < tester.cap());
                 assert!(tester.head < tester.cap());
                 assert_eq!(tester, expected);
-                
+
             }
         }
     }

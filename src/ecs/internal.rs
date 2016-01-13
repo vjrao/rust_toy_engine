@@ -19,7 +19,7 @@ use super::world::WorldAllocator;
 
 const INITIAL_CAPACITY: usize = 512;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 // What granularity an entity's data is.
 pub enum Granularity {
     Small,
@@ -335,6 +335,11 @@ impl BlockHandle {
     pub fn gran_idx(&self) -> (Granularity, usize) {
         (self.granularity, self.index)
     }
+    
+    // Initialize the block.
+    pub unsafe fn initialize(&mut self, entity: Entity) {
+        (**self.header).entity = entity;
+    }
 }
 
 // The data blob is where all the component data is stored.
@@ -408,6 +413,12 @@ impl Blob {
             let old_num_blocks = self.blocks_per_slab;
             self.grow();
             
+            debug_assert!(match granularity {
+                Granularity::Small => !self.small.is_alive(old_num_blocks),
+                Granularity::Medium => !self.medium.is_alive(old_num_blocks),
+                Granularity::Large => !self.large.is_alive(old_num_blocks),
+            });
+        
             match granularity {
                 Granularity::Small => self.small.acquire_block(old_num_blocks),
                 Granularity::Medium => self.medium.acquire_block(old_num_blocks),
@@ -415,12 +426,6 @@ impl Blob {
             }
             
             old_num_blocks
-        });
-        
-        debug_assert!(match granularity {
-            Granularity::Small => !self.small.is_alive(index),
-            Granularity::Medium => !self.medium.is_alive(index),
-            Granularity::Large => !self.large.is_alive(index),
         });
         
         unsafe {
@@ -500,8 +505,8 @@ impl Blob {
         }
     }
     
-    // get a handle to live block.
-    pub fn get_block(&self, granularity: Granularity, index: usize) -> Option<BlockHandle> {
+    // get a handle to live block. panics on index out of bounds.
+    pub fn get_block(&self, granularity: Granularity, index: usize) -> BlockHandle {
         debug_assert!(match granularity {
             Granularity::Small => self.small.is_alive(index),
             Granularity::Medium => self.medium.is_alive(index),
@@ -514,9 +519,10 @@ impl Blob {
             Granularity::Large => self.large_offset() + index * block_size_with_header(LARGE_SIZE)
         };
         
-        self.data.clone().map(|data_ptr| unsafe {
-            BlockHandle::from_raw(data_ptr.offset(off as isize), granularity, off)
-        })
+        let data_ptr = self.data.clone().expect("Block index out of bounds");
+        unsafe {
+            BlockHandle::from_raw(data_ptr.offset(off as isize), granularity, index)
+        }
     }
     
     // Free a block. It must not be used again until it is next allocated.
@@ -526,7 +532,7 @@ impl Blob {
             Granularity::Small => self.small.is_alive(index),
             Granularity::Medium => self.medium.is_alive(index),
             Granularity::Large => self.large.is_alive(index),
-        });
+        }, "Attempted to free dead block at {:?}", block.gran_idx());
                      
         match block.granularity {
             Granularity::Small => self.small.mark_free(index),
@@ -598,11 +604,7 @@ impl MasterOffsetTable {
     
     // ensure enough capacity for `size` elements.
     fn ensure_capacity(&mut self, size: usize) {
-        let len = self.offsets.len();
-        if len >= size { return }
-        
-        self.offsets.reserve(size - len);
-        while self.offsets.len() < size {
+        while self.offsets.len() <= size {
             self.offsets.push(None);
         }
     }
@@ -669,11 +671,7 @@ impl<T: Component> ComponentOffsetTable<T> {
     }
     
     fn ensure_capacity(&mut self, size: usize) {
-        let len = self.offsets.len();
-        if len >= size { return }
-        
-        self.offsets.reserve(size - len);
-        while self.offsets.len() < size {
+        while self.offsets.len() <= size {
             self.offsets.push(CLEARED);
         }
     }

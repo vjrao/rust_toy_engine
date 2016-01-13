@@ -121,6 +121,57 @@ impl<T, A: Allocator> Vector<T, A> {
 		}
 	}
 	
+	/// Sets the length of the vector unsafely.
+	pub unsafe fn set_len(&mut self, len: usize) {
+        self.len = len;
+    }
+	
+	/// Insert an element at the designated index.
+	/// Panics on out-of-bounds.
+	pub fn insert(&mut self, index: usize, element: T) {
+        let len = self.len();
+        assert!(index <= len);
+
+        // space for the new element
+        if len == self.buf.cap() { self.buf.double(); }
+
+        unsafe { // infallible
+            // The spot to put the new value
+            {
+                let p = self.as_mut_ptr().offset(index as isize);
+                // Shift everything over to make space. (Duplicating the
+                // `index`th element into two consecutive places.)
+                ptr::copy(p, p.offset(1), len - index);
+                // Write it in, overwriting the first copy of the `index`th
+                // element.
+                ptr::write(p, element);
+            }
+            self.set_len(len + 1);
+        }
+    }
+	
+	/// Remove the element at the designated index.
+	/// Panics on out-of-bounds.
+	pub fn remove(&mut self, index: usize) -> T {
+        let len = self.len();
+        assert!(index < len);
+        unsafe { // infallible
+            let ret;
+            {
+                // the place we are taking from.
+                let ptr = self.as_mut_ptr().offset(index as isize);
+                // copy it out, unsafely having a copy of the value on
+                // the stack and in the vector at the same time.
+                ret = ptr::read(ptr);
+
+                // Shift everything down to fill in that spot.
+                ptr::copy(ptr.offset(1), ptr, len - index - 1);
+            }
+            self.set_len(len - 1);
+            ret
+        }
+    }
+	
 	/// Truncates the vector to the given amount of elements
 	pub fn truncate(&mut self, len: usize) {
         unsafe {

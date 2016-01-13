@@ -41,16 +41,25 @@ impl Granularity {
 struct SlabMetadata {
     // list of free blocks, in reverse-sorted order.
     block_tracker: Vector<usize, WorldAllocator>,
+    size: usize,
     offset: usize,
 }
 
 impl SlabMetadata {
-    fn resize_to(&mut self, new_size: usize) {
-        let cur_size = self.block_tracker.capacity();
-        
-        for idx in (cur_size..new_size).rev() {
+    fn new(alloc: WorldAllocator) -> Self {
+        SlabMetadata {
+            block_tracker: Vector::with_alloc_and_capacity(alloc, INITIAL_CAPACITY),
+            size: 0,
+            offset: 0,
+        }    
+    }
+    
+    fn resize_to(&mut self, new_size: usize, offset: usize) {        
+        for idx in (self.size..new_size).rev() {
             self.block_tracker.push(idx);
         }
+        self.size = new_size;
+        self.offset = offset;
     }
     
     // gets the index of the next free block and marks it used.
@@ -367,25 +376,16 @@ impl Blob {
             blocks_per_slab: 0,
             alloc: alloc,
             
-            small: SlabMetadata {
-                block_tracker: Vector::with_alloc(alloc),
-                offset: 0,
-            },
-            medium: SlabMetadata {
-                block_tracker: Vector::with_alloc(alloc),
-                offset: 0,
-            },
-            large: SlabMetadata {
-                block_tracker: Vector::with_alloc(alloc),
-                offset: 0,
-            }
+            small: SlabMetadata::new(alloc),
+            medium: SlabMetadata::new(alloc),
+            large: SlabMetadata::new(alloc),
         }
     }
     
     // get the offset of the "small" block.
     #[inline]
     fn small_offset(&self) -> usize {
-        0
+        self.small.offset
     }
     
     // get the offset of the "medium" block.
@@ -498,13 +498,10 @@ impl Blob {
             self.data = Some(*alloc_res.unwrap());
             self.data_kind = Some(all_slabs);
         
-            // update slab metadata
-            self.medium.offset = med_off;
-            self.large.offset = large_off;
-            
-            self.small.resize_to(new_size);
-            self.medium.resize_to(new_size);
-            self.large.resize_to(new_size);
+            // update slab metadata         
+            self.small.resize_to(new_size, 0);
+            self.medium.resize_to(new_size, med_off);
+            self.large.resize_to(new_size, large_off);
             
             self.blocks_per_slab = new_size;
         }

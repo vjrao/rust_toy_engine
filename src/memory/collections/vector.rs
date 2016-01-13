@@ -108,18 +108,16 @@ impl<T, A: Allocator> Vector<T, A> {
 	}
 	
 	/// Pop an element from the vector.
-	pub fn pop(&mut self) -> Option<T> {
-		if self.len() != 0 {
-			unsafe {
-				let end = self.buf.ptr().offset(self.len() as isize);
-				let val = ptr::read(end);
-				self.len -= 1;
-				Some(val)
-			}
-		} else {
-			None
-		}
-	}
+    pub fn pop(&mut self) -> Option<T> {
+        if self.len == 0 {
+            None
+        } else {
+            unsafe {
+                self.len -= 1;
+                Some(ptr::read(self.get_unchecked(self.len())))
+            }
+        }
+    }
 	
 	/// Sets the length of the vector unsafely.
 	pub unsafe fn set_len(&mut self, len: usize) {

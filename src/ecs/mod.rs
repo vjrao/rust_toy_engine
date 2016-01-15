@@ -15,7 +15,7 @@ mod world;
 
 pub use self::component::{Component, ComponentSet};
 pub use self::entity::Entity;
-pub use self::world::{World, WorldBuilder};
+pub use self::world::{Processor, ProcessingContext, ProcessingGroup, World, WorldBuilder, WorldHandle};
 
 // Maximum guaranteed component alignment.
 // There may be large implications of this being changed,

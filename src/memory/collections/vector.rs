@@ -11,7 +11,7 @@ use core::intrinsics;
 use memory::allocator::{Allocator, DefaultAllocator};
 use memory::AllocBox;
 
-use std::iter::FromIterator;
+use std::iter::{Extend, FromIterator};
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::ptr;
@@ -226,6 +226,20 @@ impl<T, A: Allocator + Default> FromIterator<T> for Vector<T, A> {
         for x in iter { v.push(x) }
         
         v
+    }
+}
+
+impl<T, A: Allocator> Extend<T> for Vector<T, A> {
+    fn extend<I: IntoIterator<Item=T>>(&mut self, iterable: I) {
+        let mut iter = iterable.into_iter();
+        while let Some(item) = iter.next() {
+            if self.len() == self.capacity() {
+                let (lower, _) = iter.size_hint();
+                self.reserve(lower.saturating_add(1));
+            }
+            
+            self.push(item);
+        }
     }
 }
 

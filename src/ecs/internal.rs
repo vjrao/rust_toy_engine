@@ -640,6 +640,10 @@ impl MasterOffsetTable {
         let entry: Option<&mut Option<Offset>> = self.offsets.get_mut(index_of(entity) as usize);
         entry.and_then(|off| off.take())
     }
+    
+    pub fn get_slice(&self) -> &[Option<Offset>] {
+        &self.offsets
+    }
 
     // ensure enough capacity for `size` elements.
     fn ensure_capacity(&mut self, size: usize) {

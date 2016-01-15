@@ -9,7 +9,7 @@ use super::component::{Component, Components, Empty, ListEntry, make_empty, Phan
 use super::entity::{Entity, EntityManager, MIN_UNUSED};
 
 use super::internal::{Blob, BlockHandle, ComponentOffsetTable, Granularity, MasterOffsetTable,
-                      SlotError};
+                      Offset, SlotError};
 
 use jobsteal::WorkPool;
 
@@ -231,6 +231,36 @@ impl<C: Components> State<C> {
             })
         })
     }
+    
+    // Make a vector of all offsets which refer to blocks with entities that are both alive
+    // and fulfill the predicate provided. Uses the given allocator to create the vector.
+    fn all_which_fulfill<P, A>(&self, mut pred: P, alloc: A) -> Vector<Offset, A>
+    where P: FnMut(Entity) -> bool, A: Allocator {
+        let mut offsets = Vector::with_alloc(alloc);
+        // probably could get better cache coherence by performing each step once
+        // and using map_in_place.
+        let producer = self.offsets.get_slice().iter().cloned()
+            .enumerate()
+            .filter_map(|(idx, off)| off.clone().map(|some| (idx, some)))
+            .filter_map(|(idx, off)| {
+                // any entity which has an offset in the master offset table is alive,
+                // so we first filter by that and then create the entities retroactively.
+                let entity = unsafe { self.entities.entity_at(idx) };
+                if pred(entity) {
+                    Some(off)
+                } else {
+                    None
+                }
+            });
+            
+        offsets.extend(producer);
+        offsets
+    }
+}
+
+/// An iterator.
+pub struct Iter<I: Iterator<Item=Offset>> {
+    inner: I,
 }
 
 /// The world manages state for entities and components.

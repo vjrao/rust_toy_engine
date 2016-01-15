@@ -101,6 +101,12 @@ impl EntityManager {
         self.generation[idx as usize].wrapping_add(1);
         self.unused.push_back(idx);
     }
+    
+    /// Get the entity which exists at the given index.
+    /// The caller of this function must ensure it is alive.
+    pub unsafe fn entity_at(&self, idx: usize) -> Entity {
+        Entity::new(idx as u32, self.generation[idx])
+    }
 
     /// Get an upper bound on the number of entities which could be live.
     pub fn size_hint(&self) -> usize {

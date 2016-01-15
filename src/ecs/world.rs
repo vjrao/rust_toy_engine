@@ -8,10 +8,9 @@ use super::component::{Component, Components, Empty, ListEntry, make_empty, Phan
 
 use super::entity::{Entity, EntityManager, MIN_UNUSED};
 
-use super::internal::{Blob, BlockHandle, ComponentOffsetTable, Granularity, MasterOffsetTable,
-                      SlotError};
+use super::internal::{Blob, Granularity, Offset, SlotError};
 
-use jobsteal::WorkPool;
+use jobsteal::{WorkPool, Spawner};
 
 /// The world's allocator: for long term storage.
 ///
@@ -56,7 +55,6 @@ struct State<C: Components> {
     components: C,
     entities: EntityManager,
     blob: Blob,
-    offsets: MasterOffsetTable,
     dead_entities: Vector<Entity, WorldAllocator>,
     alloc: WorldAllocator,
 }
@@ -65,15 +63,11 @@ impl<C: Components> State<C> {
     // get an entity from the entity manager, allocate a Small block for it,
     // and create an entry in the master offset table.
     fn next_entity(&mut self) -> Entity {
-        let e = self.entities.next_entity();
         // we give each entity a small block by default.
         let mut block = self.blob.next_block(Granularity::Small);
+        let e = self.entities.next_entity(block.offset());
 
         unsafe { block.initialize(e) }
-        let (gran, idx) = block.gran_idx();
-
-        self.offsets.set(e, gran, idx);
-
         e
     }
 
@@ -82,13 +76,13 @@ impl<C: Components> State<C> {
         if !self.is_alive(e) {
             return;
         }
-
-        unsafe { self.entities.destroy_entity(e) }
-        if let Some((gran, index)) = self.offsets.remove(e) {
-            let block = self.blob.get_block(gran, index);
+        
+        if let Some(block_offset) = self.entities.offset_of(e) {
+            let block = self.blob.get_block(block_offset);
             unsafe { self.blob.free_block(block) }
         }
 
+        unsafe { self.entities.destroy_entity(e) }
         // cache dead entities until their index can possibly be recycled.
         // then have each component offset table clear them all at once,
         // minimizing cache misses for the batch.
@@ -110,9 +104,16 @@ impl<C: Components> State<C> {
         }
     }
 
-    // whether an entity has a component.
+    // whether an entity has a component. this checks whether the entitiy is alive first.
     fn has_component<T: Component>(&self, e: Entity) -> bool {
         self.is_alive(e) && self.components.get::<T>().offset_of(e).is_some()
+    }
+    
+    // whether a (possibly dead) entity has a component.
+    // the caller should check that the entity is in fact alive before attempting
+    // to use this offset.
+    unsafe fn has_component_unchecked<T: Component>(&self, e: Entity) -> bool {
+        self.components.get::<T>().offset_of(e).is_some()
     }
 
     // whether an entity is alive.
@@ -124,9 +125,9 @@ impl<C: Components> State<C> {
     fn get_component<T: Component>(&self, e: Entity) -> Option<&T> {
         use std::mem;
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
+        self.entities.offset_of(e).and_then(|block_offset| {
             // We store offsets only for blocks which we can get handles for.
-            let block = self.blob.get_block(gran, index);
+            let block = self.blob.get_block(block_offset);
             self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
                 mem::transmute::<*mut T,
                                  &T>(block.data_ptr().offset(comp_offset as isize) as *mut T)
@@ -138,9 +139,9 @@ impl<C: Components> State<C> {
     fn get_mut_component<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
         use std::mem;
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
+        self.entities.offset_of(e).and_then(|block_offset| {
             // We store offsets only for blocks which we can get handles for.
-            let block = self.blob.get_block(gran, index);
+            let block = self.blob.get_block(block_offset);
             self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
                 mem::transmute::<*mut T,
                                  &mut T>(block.data_ptr().offset(comp_offset as isize) as *mut T)
@@ -155,8 +156,8 @@ impl<C: Components> State<C> {
 
         let size = mem::size_of::<T>();
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
-            let mut block = self.blob.get_block(gran, index);
+        self.entities.offset_of(e).and_then(|block_offset| {
+            let mut block = self.blob.get_block(block_offset);
             if let Some(offset) = self.components.get::<T>().offset_of(e) {
                 // already have a slot for this component.
                 if size == 0 {
@@ -206,8 +207,8 @@ impl<C: Components> State<C> {
 
         let size = mem::size_of::<T>();
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
-            let mut block = self.blob.get_block(gran, index);
+        self.entities.offset_of(e).and_then(|block_offset| {
+            let mut block = self.blob.get_block(block_offset);
             self.components.get_mut::<T>().remove(e).map(|off| unsafe {
                 if size == 0 {
                     // zero-sized types are all the same...right?
@@ -226,12 +227,27 @@ impl<C: Components> State<C> {
             })
         })
     }
+    
+    // Make a vector of all offsets which refer to blocks with entities that are both alive
+    // and fulfill the predicate provided. Uses the given allocator to create the vector.
+    fn all_which_fulfill<P, A>(&self, mut pred: P, alloc: A) -> Vector<Offset, A>
+    where P: FnMut(Entity) -> bool, A: Allocator {
+        let mut offsets = Vector::with_alloc(alloc);
+        // probably could get better cache coherence by performing each step once
+        // and using map_in_place.
+        let producer = self.entities.iter()
+            .filter(|e| pred(*e))
+            .filter_map(|e| self.entities.offset_of(e));
+            
+        offsets.extend(producer);
+        offsets
+    }
 }
 
 /// The world manages state for entities and components.
 /// Typically, you will alter state via `Processors` which run 
 /// in groups you provide, but you can also do some specific state altering
-/// through the world itself. Any kind of introspection on the world itself
+/// through the world itself. Any kind of direct introspection on the world itself
 /// requires exclusive access through a mutable reference.
 pub struct World<C: Components> {
     state: RwLock<State<C>>,
@@ -284,6 +300,105 @@ impl<C: Components> World<C> {
     pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
         self.state.get_mut().unwrap().remove_component(entity)
     }
+    
+    /// Create an `ProcessingContext` and provide it to the supplied closure to execute
+    /// processors.
+    pub fn process<F>(&mut self, f: F) where F: FnOnce(ProcessingContext<C>) {
+        // this is an expensive call, so don't do it all the time.
+        if cfg!(debug_assertions) {
+            let state = self.state.get_mut().unwrap();
+            for entity in state.entities.iter() {
+                state.components.assert_dependencies(&state.components, entity);   
+            }
+        }
+        
+        let ctxt = ProcessingContext {
+            state: &self.state,
+            pool: &mut self.pool,
+        };
+        
+        f(ctxt);
+    }
+}
+
+/// A processor performs some specific task.
+/// In the entity-component-system model of computation,
+/// a processor will iterate over all entities with some specific
+/// set of components and perform some action for each of them.
+pub trait Processor {
+    /// Perform the processing step.
+    fn process<'a, 'b, C: Components + 'a>(&'a mut self, world: WorldHandle<'a, 'b, C>);
+}
+
+/// Used to execute `Processor`s. A mutable reference to this is
+/// provided to the function passed to World::execute().
+pub struct ProcessingContext<'a, C: Components + 'a> {
+    state: &'a RwLock<State<C>>,
+    pool: &'a mut WorkPool,
+}
+
+impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
+    /// Create an execution scope for executing a group of processors fully asynchronously.
+    pub fn process_group<F>(&mut self, f: F) where F: for <'wh, 'sp> FnOnce(ProcessingGroup<'wh, 'sp, C>) {
+        let state = self.state;
+        self.pool.scope(move |spawner| {
+            let wh = WorldHandle {
+                state: state,
+                spawner: spawner,
+            };
+            
+            // need the double scope here unfortunately.
+            // it's ok, scopes are very cheap.
+            spawner.scope(move |_| {
+                f(ProcessingGroup {
+                    world: wh,
+                })
+            });
+        });
+    }
+    
+    /// Execute a processor which must do some work synchronously.
+    /// This is not recommended to be used except when some task needs to be done on the main thread,
+    /// e.g. rendering and collecting window events.
+    /// While the WorldHandle can be used to perform certain parts of the process asynchronously,
+    /// this will block execution until the processor is 100% complete, rather than moving onto the 
+    /// next.
+    pub fn process_sync<P: Processor>(&mut self, p: &mut P) {
+        let state = self.state;
+        self.pool.scope(move |spawner| {
+            let wh = WorldHandle {
+                state: state,
+                spawner: spawner,
+            };
+            
+            p.process(wh);
+        })
+    }
+}
+
+/// Used to dispatch groups of processors completely asynchronously.
+pub struct ProcessingGroup<'wh, 'sp, C: Components + 'wh> where 'sp: 'wh {
+    world: WorldHandle<'wh, 'sp, C>,
+}
+
+impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
+    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) {
+        let wh = WorldHandle {
+          state: self.world.state,
+          spawner: self.world.spawner,  
+        };
+        
+        self.world.spawner.submit(move |_| {
+            p.process(wh);
+        })
+    }
+}
+
+/// Provides access to the world state with an API that facilitates easy multithreaded
+/// processing.
+pub struct WorldHandle<'wh, 'sp, C: Components + 'wh> where 'sp: 'wh {
+    state: &'wh RwLock<State<C>>,
+    spawner: &'wh Spawner<'sp, 'sp>,
 }
 
 /// Used to build a world with the given components.
@@ -329,7 +444,6 @@ impl<T: PhantomComponents> WorldBuilder<T> {
             components: components,
             entities: EntityManager::new(alloc),
             blob: Blob::new(alloc),
-            offsets: MasterOffsetTable::new(alloc),
             dead_entities: Vector::with_alloc_and_capacity(alloc, MIN_UNUSED),
             alloc: alloc,
         };
@@ -344,18 +458,23 @@ impl<T: PhantomComponents> WorldBuilder<T> {
 #[cfg(test)]
 mod tests {
     use super::{World, WorldBuilder};
+    use ecs::Component;
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     struct Pos {
         x: i32,
         y: i32,
     }
+    
+    impl Component for Pos {}
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     struct Vel {
         x: i32,
         y: i32,
     }
+    
+    impl Component for Vel {}
 
     #[test]
     #[should_panic]

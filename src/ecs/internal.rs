@@ -2,6 +2,7 @@
 use core::nonzero::NonZero;
 use memory::Vector;
 
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::ptr;
 
@@ -11,7 +12,7 @@ use super::world::WorldAllocator;
 
 const INITIAL_CAPACITY: usize = 512;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd)]
 // What granularity an entity's data is.
 pub enum Granularity {
     Small,
@@ -117,6 +118,34 @@ struct EmptySlot {
     size: u32,
     next_free: u32,
     padding: [u8; PADDING_SIZE],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd)]
+pub struct Offset {
+    granularity: Granularity,
+    inner_off: usize,
+}
+
+impl Offset {
+    pub fn new(granularity: Granularity, offset: usize) -> Self {
+        Offset {
+            granularity: granularity,
+            inner_off: offset,
+        }
+    }
+    
+    pub fn into_parts(self) -> (Granularity, usize) {
+        (self.granularity, self.inner_off)
+    }
+}
+
+impl Ord for Offset {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.granularity as usize).cmp(&(other.granularity as usize)) {
+            Ordering::Equal => self.inner_off.cmp(&other.inner_off),
+            other => other,
+        }
+    }
 }
 
 pub enum SlotError {
@@ -342,8 +371,8 @@ impl BlockHandle {
     }
 
     // Returns the unique granularity-index pair which describes this block.
-    pub fn gran_idx(&self) -> (Granularity, usize) {
-        (self.granularity, self.index)
+    pub fn offset(&self) -> Offset {
+        Offset::new(self.granularity, self.index)
     }
 
     // Initialize the block.
@@ -514,7 +543,8 @@ impl Blob {
     }
 
     // get a handle to live block. panics on index out of bounds.
-    pub fn get_block(&self, granularity: Granularity, index: usize) -> BlockHandle {
+    pub fn get_block(&self, offset: Offset) -> BlockHandle {
+        let (granularity, index) = (offset.granularity, offset.inner_off);
         debug_assert!(match granularity {
             Granularity::Small => self.small.is_alive(index),
             Granularity::Medium => self.medium.is_alive(index),
@@ -542,7 +572,7 @@ impl Blob {
                           Granularity::Large => self.large.is_alive(index),
                       },
                       "Attempted to free dead block at {:?}",
-                      block.gran_idx());
+                      block.offset());
 
         match block.granularity {
             Granularity::Small => self.small.mark_free(index),
@@ -576,6 +606,9 @@ impl Blob {
     }
 }
 
+unsafe impl Send for Blob {}
+unsafe impl Sync for Blob {}
+
 impl Drop for Blob {
     fn drop(&mut self) {
         use core::nonzero::NonZero;
@@ -585,42 +618,6 @@ impl Drop for Blob {
             if let Some(kind) = self.data_kind.take() {
                 let _ = self.alloc.dealloc(NonZero::new(self.data.unwrap()), kind);
             }
-        }
-    }
-}
-
-// Stores a granularity, offset pair for each entity.
-pub struct MasterOffsetTable {
-    offsets: Vector<Option<(Granularity, usize)>, WorldAllocator>,
-}
-
-impl MasterOffsetTable {
-    pub fn new(alloc: WorldAllocator) -> Self {
-        MasterOffsetTable { offsets: Vector::with_alloc(alloc) }
-    }
-
-    pub fn set(&mut self, entity: Entity, granularity: Granularity, offset: usize) {
-        let idx = index_of(entity) as usize;
-        self.ensure_capacity(idx);
-        self.offsets[idx] = Some((granularity, offset));
-    }
-
-    pub fn offset_of(&self, entity: Entity) -> Option<(Granularity, usize)> {
-        let entry: Option<&Option<(Granularity, usize)>> = self.offsets
-                                                               .get(index_of(entity) as usize);
-        entry.map(Clone::clone).unwrap_or(None)
-    }
-
-    pub fn remove(&mut self, entity: Entity) -> Option<(Granularity, usize)> {
-        let entry: Option<&mut Option<(Granularity, usize)>> =
-            self.offsets.get_mut(index_of(entity) as usize);
-        entry.and_then(|off| off.take())
-    }
-
-    // ensure enough capacity for `size` elements.
-    fn ensure_capacity(&mut self, size: usize) {
-        while self.offsets.len() <= size {
-            self.offsets.push(None);
         }
     }
 }

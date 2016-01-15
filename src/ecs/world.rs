@@ -244,11 +244,6 @@ impl<C: Components> State<C> {
     }
 }
 
-/// An iterator.
-pub struct Iter<I: Iterator<Item=Offset>> {
-    inner: I,
-}
-
 /// The world manages state for entities and components.
 /// Typically, you will alter state via `Processors` which run 
 /// in groups you provide, but you can also do some specific state altering

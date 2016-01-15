@@ -8,8 +8,7 @@ use super::component::{Component, Components, Empty, ListEntry, make_empty, Phan
 
 use super::entity::{Entity, EntityManager, MIN_UNUSED};
 
-use super::internal::{Blob, BlockHandle, ComponentOffsetTable, Granularity,
-                      Offset, SlotError};
+use super::internal::{Blob, Granularity, Offset, SlotError};
 
 use jobsteal::WorkPool;
 

@@ -3,9 +3,6 @@ use memory::collections::{VecDeque, Vector};
 use super::world::WorldAllocator;
 use super::internal::{Granularity, Offset};
 
-use std::slice::Iter;
-use std::iter::Enumerate;
-
 // The number of bits in the id to use for the generation.
 const GEN_BITS: u32 = 8;
 const GEN_MASK: u32 = (1 << GEN_BITS) - 1;

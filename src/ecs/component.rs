@@ -7,15 +7,11 @@
 //!
 //! These lists will most likely have O(1) access to members, at least when compiled with optimizations.
 //! If `TypeId::of` ever becomes a const fn, they definitely will.
-
-use memory::Vector;
-
 use std::any::{Any, TypeId};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::{Mutex, MutexGuard};
 
-use super::entity::{self, Entity, EntityManager, index_of};
+use super::entity::Entity;
 use super::internal::ComponentOffsetTable;
 use super::world::WorldAllocator;
 use super::{COMPONENT_ALIGN, LARGE_SIZE};

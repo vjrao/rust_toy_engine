@@ -6,7 +6,7 @@
 //! to execute their code efficiently across multiple threads.
 //!
 //! This is a work in progress and is not in a usable state at the moment.
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
 mod component;
 mod entity;

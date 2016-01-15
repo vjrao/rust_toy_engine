@@ -1,6 +1,10 @@
 use memory::collections::{VecDeque, Vector};
 
 use super::world::WorldAllocator;
+use super::internal::{Granularity, Offset};
+
+use std::slice::Iter;
+use std::iter::Enumerate;
 
 // The number of bits in the id to use for the generation.
 const GEN_BITS: u32 = 8;
@@ -47,69 +51,121 @@ pub fn generation_of(e: Entity) -> u8 {
     ((e.id >> INDEX_BITS) & GEN_MASK) as u8
 }
 
-type GenVec = Vector<u8, WorldAllocator>;
-type Unused = VecDeque<u32, WorldAllocator>;
+// data associated with an entity slot.
+// we don't directly embed an Offset here
+// because it wastes 8 bytes by not reusing the
+// Granularity's padding.
+// We should be able to pack all this stuff here
+// into 8/16 bytes.
+struct EntityData {
+    alive: bool,
+    gen: u8,
+    granularity: Granularity,
+    inner_off: usize,
+}
 
 /// Manages the creation and destruction of entities.
-/// This is fully thread-safe.
 pub struct EntityManager {
-    generation: GenVec,
-    unused: Unused,
+    data: Vector<EntityData, WorldAllocator>,
+    unused: VecDeque<usize, WorldAllocator>,
 }
 
 impl EntityManager {
     /// Create a new entity manager.
     pub fn new(alloc: WorldAllocator) -> Self {
         EntityManager {
-            generation: GenVec::with_alloc(alloc),
-            unused: Unused::with_alloc_and_capacity(alloc, MIN_UNUSED + 1),
+            data: Vector::with_alloc(alloc),
+            unused: VecDeque::with_alloc_and_capacity(alloc, MIN_UNUSED + 1),
         }
     }
 
-    /// Creates an entity.
-    pub fn next_entity(&mut self) -> Entity {
+    /// Creates an entity, provided with the offset of its block.
+    pub fn next_entity(&mut self, offset: Offset) -> Entity {
+        let (gran, off) = offset.into_parts();
         if self.unused.len() <= MIN_UNUSED {
-            self.generation.push(0);
-            let idx = self.generation.len() - 1;
+            self.data.push(EntityData {
+                alive: true,
+                gen: 0,
+                granularity: gran,
+                inner_off: off
+            });
+            let idx = self.data.len() - 1;
             Entity::new(idx as u32, 0)
         } else {
             let idx = self.unused.pop_front().unwrap();
-            Entity::new(idx, self.generation[idx as usize])
+            let datum = &mut self.data[idx as usize];
+            datum.alive = true;
+            datum.granularity = gran;
+            datum.inner_off = off;
+            Entity::new(idx as u32, datum.gen)
         }
     }
 
     /// Whether an entity is currently "alive", or exists.
     #[inline]
     pub fn is_alive(&self, e: Entity) -> bool {
-        self.generation
+        self.data
             .get(index_of(e) as usize)
-            .and_then(|gen| {
-                if *gen == generation_of(e) {
+            .and_then(|datum| {
+                if datum.alive {
                     Some(())
                 } else {
                     None
                 }
-            })
-            .is_some()
+            }).is_some()
+    }
+    
+    pub fn offset_of(&self, e: Entity) -> Option<Offset> {
+        if self.is_alive(e) {
+            let datum = &self.data[index_of(e) as usize];
+            Some(Offset::new(datum.granularity, datum.inner_off))
+        } else {
+            None
+        }
     }
 
-    /// Destroy an entity. THe entity must be alive when this 
+    /// Destroy an entity. The entity must be alive when this 
     /// is called. Destroying an entity multiple times can lead
     /// to memory unsafety.
     pub unsafe fn destroy_entity(&mut self, e: Entity) {
-        let idx = index_of(e);
-        self.generation[idx as usize].wrapping_add(1);
+        let idx = index_of(e) as usize;
+        self.data[idx].gen.wrapping_add(1);
+        self.data[idx].alive = false;
         self.unused.push_back(idx);
-    }
-    
-    /// Get the entity which exists at the given index.
-    /// The caller of this function must ensure it is alive.
-    pub unsafe fn entity_at(&self, idx: usize) -> Entity {
-        Entity::new(idx as u32, self.generation[idx])
     }
 
     /// Get an upper bound on the number of entities which could be live.
     pub fn size_hint(&self) -> usize {
-        self.generation.len()
+        self.data.len()
+    }
+    
+    /// Get an iterator over all living entities.
+    pub fn iter(&self) -> Entities {
+        Entities {
+            slice: &self.data,
+            cur_idx: 0,
+        }
+    }
+}
+
+/// An iterator over all living entities.
+pub struct Entities<'a> {
+    slice: &'a [EntityData],
+    cur_idx: usize,
+}
+
+impl<'a> Iterator for Entities<'a> {
+    type Item = Entity;
+    
+    fn next(&mut self) -> Option<Entity> {
+        while let Some(data) = self.slice.get(self.cur_idx) {
+            if data.alive {
+                return Some(Entity::new(self.cur_idx as u32, data.gen));
+            } else {
+                self.cur_idx += 1;
+            }
+        }
+        
+        None
     }
 }

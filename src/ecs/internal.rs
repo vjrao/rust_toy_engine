@@ -127,11 +127,15 @@ pub struct Offset {
 }
 
 impl Offset {
-    fn new(granularity: Granularity, offset: usize) -> Self {
+    pub fn new(granularity: Granularity, offset: usize) -> Self {
         Offset {
             granularity: granularity,
             inner_off: offset,
         }
+    }
+    
+    pub fn into_parts(self) -> (Granularity, usize) {
+        (self.granularity, self.inner_off)
     }
 }
 
@@ -611,44 +615,6 @@ impl Drop for Blob {
             if let Some(kind) = self.data_kind.take() {
                 let _ = self.alloc.dealloc(NonZero::new(self.data.unwrap()), kind);
             }
-        }
-    }
-}
-
-// Stores a granularity, offset pair for each entity.
-pub struct MasterOffsetTable {
-    offsets: Vector<Option<Offset>, WorldAllocator>,
-}
-
-impl MasterOffsetTable {
-    pub fn new(alloc: WorldAllocator) -> Self {
-        MasterOffsetTable { offsets: Vector::with_alloc(alloc) }
-    }
-
-    pub fn set(&mut self, entity: Entity, off: Offset) {
-        let idx = index_of(entity) as usize;
-        self.ensure_capacity(idx);
-        self.offsets[idx] = Some(off);
-    }
-
-    pub fn offset_of(&self, entity: Entity) -> Option<Offset> {
-        let entry: Option<&Option<Offset>> = self.offsets.get(index_of(entity) as usize);
-        entry.map(Clone::clone).unwrap_or(None)
-    }
-
-    pub fn remove(&mut self, entity: Entity) -> Option<Offset> {
-        let entry: Option<&mut Option<Offset>> = self.offsets.get_mut(index_of(entity) as usize);
-        entry.and_then(|off| off.take())
-    }
-    
-    pub fn get_slice(&self) -> &[Option<Offset>] {
-        &self.offsets
-    }
-
-    // ensure enough capacity for `size` elements.
-    fn ensure_capacity(&mut self, size: usize) {
-        while self.offsets.len() <= size {
-            self.offsets.push(None);
         }
     }
 }

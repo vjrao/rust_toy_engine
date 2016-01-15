@@ -8,7 +8,7 @@ use super::component::{Component, Components, Empty, ListEntry, make_empty, Phan
 
 use super::entity::{Entity, EntityManager, MIN_UNUSED};
 
-use super::internal::{Blob, BlockHandle, ComponentOffsetTable, Granularity, MasterOffsetTable,
+use super::internal::{Blob, BlockHandle, ComponentOffsetTable, Granularity,
                       Offset, SlotError};
 
 use jobsteal::WorkPool;
@@ -56,7 +56,6 @@ struct State<C: Components> {
     components: C,
     entities: EntityManager,
     blob: Blob,
-    offsets: MasterOffsetTable,
     dead_entities: Vector<Entity, WorldAllocator>,
     alloc: WorldAllocator,
 }
@@ -65,13 +64,11 @@ impl<C: Components> State<C> {
     // get an entity from the entity manager, allocate a Small block for it,
     // and create an entry in the master offset table.
     fn next_entity(&mut self) -> Entity {
-        let e = self.entities.next_entity();
         // we give each entity a small block by default.
         let mut block = self.blob.next_block(Granularity::Small);
+        let e = self.entities.next_entity(block.offset());
 
         unsafe { block.initialize(e) }
-        self.offsets.set(e, block.offset());
-
         e
     }
 
@@ -80,13 +77,13 @@ impl<C: Components> State<C> {
         if !self.is_alive(e) {
             return;
         }
-
-        unsafe { self.entities.destroy_entity(e) }
-        if let Some(block_offset) = self.offsets.remove(e) {
+        
+        if let Some(block_offset) = self.entities.offset_of(e) {
             let block = self.blob.get_block(block_offset);
             unsafe { self.blob.free_block(block) }
         }
 
+        unsafe { self.entities.destroy_entity(e) }
         // cache dead entities until their index can possibly be recycled.
         // then have each component offset table clear them all at once,
         // minimizing cache misses for the batch.
@@ -129,7 +126,7 @@ impl<C: Components> State<C> {
     fn get_component<T: Component>(&self, e: Entity) -> Option<&T> {
         use std::mem;
 
-        self.offsets.offset_of(e).and_then(|block_offset| {
+        self.entities.offset_of(e).and_then(|block_offset| {
             // We store offsets only for blocks which we can get handles for.
             let block = self.blob.get_block(block_offset);
             self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
@@ -143,7 +140,7 @@ impl<C: Components> State<C> {
     fn get_mut_component<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
         use std::mem;
 
-        self.offsets.offset_of(e).and_then(|block_offset| {
+        self.entities.offset_of(e).and_then(|block_offset| {
             // We store offsets only for blocks which we can get handles for.
             let block = self.blob.get_block(block_offset);
             self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
@@ -160,7 +157,7 @@ impl<C: Components> State<C> {
 
         let size = mem::size_of::<T>();
 
-        self.offsets.offset_of(e).and_then(|block_offset| {
+        self.entities.offset_of(e).and_then(|block_offset| {
             let mut block = self.blob.get_block(block_offset);
             if let Some(offset) = self.components.get::<T>().offset_of(e) {
                 // already have a slot for this component.
@@ -211,7 +208,7 @@ impl<C: Components> State<C> {
 
         let size = mem::size_of::<T>();
 
-        self.offsets.offset_of(e).and_then(|block_offset| {
+        self.entities.offset_of(e).and_then(|block_offset| {
             let mut block = self.blob.get_block(block_offset);
             self.components.get_mut::<T>().remove(e).map(|off| unsafe {
                 if size == 0 {
@@ -239,19 +236,9 @@ impl<C: Components> State<C> {
         let mut offsets = Vector::with_alloc(alloc);
         // probably could get better cache coherence by performing each step once
         // and using map_in_place.
-        let producer = self.offsets.get_slice().iter().cloned()
-            .enumerate()
-            .filter_map(|(idx, off)| off.clone().map(|some| (idx, some)))
-            .filter_map(|(idx, off)| {
-                // any entity which has an offset in the master offset table is alive,
-                // so we first filter by that and then create the entities retroactively.
-                let entity = unsafe { self.entities.entity_at(idx) };
-                if pred(entity) {
-                    Some(off)
-                } else {
-                    None
-                }
-            });
+        let producer = self.entities.iter()
+            .filter(|e| pred(*e))
+            .filter_map(|e| self.entities.offset_of(e));
             
         offsets.extend(producer);
         offsets
@@ -364,7 +351,6 @@ impl<T: PhantomComponents> WorldBuilder<T> {
             components: components,
             entities: EntityManager::new(alloc),
             blob: Blob::new(alloc),
-            offsets: MasterOffsetTable::new(alloc),
             dead_entities: Vector::with_alloc_and_capacity(alloc, MIN_UNUSED),
             alloc: alloc,
         };

@@ -1,5 +1,7 @@
 use memory::collections::{VecDeque, Vector};
 
+use std::fmt;
+
 use super::world::WorldAllocator;
 use super::internal::{Granularity, Offset};
 
@@ -37,6 +39,12 @@ impl Entity {
         assert!(index < (1 << INDEX_BITS));
         let id = (gen as u32).wrapping_shl(INDEX_BITS as u32) + index;
         Entity { id: id }
+    }
+}
+
+impl fmt::Display for Entity {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:x}", self.id)
     }
 }
 

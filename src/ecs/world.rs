@@ -70,9 +70,7 @@ impl<C: Components> State<C> {
         let mut block = self.blob.next_block(Granularity::Small);
 
         unsafe { block.initialize(e) }
-        let (gran, idx) = block.gran_idx();
-
-        self.offsets.set(e, gran, idx);
+        self.offsets.set(e, block.offset());
 
         e
     }
@@ -84,8 +82,8 @@ impl<C: Components> State<C> {
         }
 
         unsafe { self.entities.destroy_entity(e) }
-        if let Some((gran, index)) = self.offsets.remove(e) {
-            let block = self.blob.get_block(gran, index);
+        if let Some(block_offset) = self.offsets.remove(e) {
+            let block = self.blob.get_block(block_offset);
             unsafe { self.blob.free_block(block) }
         }
 
@@ -131,9 +129,9 @@ impl<C: Components> State<C> {
     fn get_component<T: Component>(&self, e: Entity) -> Option<&T> {
         use std::mem;
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
+        self.offsets.offset_of(e).and_then(|block_offset| {
             // We store offsets only for blocks which we can get handles for.
-            let block = self.blob.get_block(gran, index);
+            let block = self.blob.get_block(block_offset);
             self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
                 mem::transmute::<*mut T,
                                  &T>(block.data_ptr().offset(comp_offset as isize) as *mut T)
@@ -145,9 +143,9 @@ impl<C: Components> State<C> {
     fn get_mut_component<T: Component>(&mut self, e: Entity) -> Option<&mut T> {
         use std::mem;
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
+        self.offsets.offset_of(e).and_then(|block_offset| {
             // We store offsets only for blocks which we can get handles for.
-            let block = self.blob.get_block(gran, index);
+            let block = self.blob.get_block(block_offset);
             self.components.get::<T>().offset_of(e).map(|comp_offset| unsafe {
                 mem::transmute::<*mut T,
                                  &mut T>(block.data_ptr().offset(comp_offset as isize) as *mut T)
@@ -162,8 +160,8 @@ impl<C: Components> State<C> {
 
         let size = mem::size_of::<T>();
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
-            let mut block = self.blob.get_block(gran, index);
+        self.offsets.offset_of(e).and_then(|block_offset| {
+            let mut block = self.blob.get_block(block_offset);
             if let Some(offset) = self.components.get::<T>().offset_of(e) {
                 // already have a slot for this component.
                 if size == 0 {
@@ -213,8 +211,8 @@ impl<C: Components> State<C> {
 
         let size = mem::size_of::<T>();
 
-        self.offsets.offset_of(e).and_then(|(gran, index)| {
-            let mut block = self.blob.get_block(gran, index);
+        self.offsets.offset_of(e).and_then(|block_offset| {
+            let mut block = self.blob.get_block(block_offset);
             self.components.get_mut::<T>().remove(e).map(|off| unsafe {
                 if size == 0 {
                     // zero-sized types are all the same...right?

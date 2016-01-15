@@ -13,7 +13,7 @@ mod entity;
 mod internal;
 mod world;
 
-pub use self::component::Component;
+pub use self::component::{Component, ComponentSet};
 pub use self::entity::Entity;
 pub use self::world::{World, WorldBuilder};
 

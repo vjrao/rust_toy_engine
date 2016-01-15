@@ -1,5 +1,6 @@
 #![feature(
 	alloc,
+	associated_type_defaults,
 	coerce_unsized,
 	core_intrinsics,
 	default_type_parameter_fallback,

@@ -364,18 +364,23 @@ impl<T: PhantomComponents> WorldBuilder<T> {
 #[cfg(test)]
 mod tests {
     use super::{World, WorldBuilder};
+    use ecs::Component;
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     struct Pos {
         x: i32,
         y: i32,
     }
+    
+    impl Component for Pos {}
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     struct Vel {
         x: i32,
         y: i32,
     }
+    
+    impl Component for Vel {}
 
     #[test]
     #[should_panic]

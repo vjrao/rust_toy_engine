@@ -239,6 +239,22 @@ macro_rules! impl_component_set {
     };
 }
 
+impl<T: Component> ComponentSet for T {
+    #[inline]
+    fn contains<C: Component>() -> bool {
+        TypeId::of::<C>() == TypeId::of::<T>()
+    }
+    
+    #[inline]
+    fn has_all<C: Components>(components: &C, e: Entity) -> Result<(), &'static str> {
+        if components.get::<T>().offset_of(e).is_none() {
+            Err(unsafe { intrinsics::type_name::<T>() })
+        } else {
+            Ok(())
+        }
+    }
+}
+
 // couldn't get a recursive macro to work. Seems like they've tightened the rules?
 impl_component_set!(A, B, C, D, E, F, G, H, I, J, K, L,);
 impl_component_set!(A, B, C, D, E, F, G, H, I, J, K,);

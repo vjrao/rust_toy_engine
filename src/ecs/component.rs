@@ -119,7 +119,7 @@ impl<C: Component, P: PhantomComponents> PhantomComponents for ListEntry<Phantom
 }
 
 // A list where each entry is an offset table for that component.
-pub trait Components: Sized {
+pub trait Components: Sized + Send + Sync {
     // Get a reference to the offset table for the given component type.
     // This panics if the component type is not present in this list.
     fn get<T: Component>(&self) -> &ComponentOffsetTable<T>;

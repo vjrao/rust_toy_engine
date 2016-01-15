@@ -606,6 +606,9 @@ impl Blob {
     }
 }
 
+unsafe impl Send for Blob {}
+unsafe impl Sync for Blob {}
+
 impl Drop for Blob {
     fn drop(&mut self) {
         use core::nonzero::NonZero;

@@ -106,7 +106,7 @@ impl<C: Components> State<C> {
 
     // whether an entity has a component. this checks whether the entitiy is alive first.
     fn has_component<T: Component>(&self, e: Entity) -> bool {
-        self.is_alive(e) && self.components.get::<T>().offset_of(e).is_some()
+        self.components.get::<T>().offset_of(e).is_some()
     }
 
     // whether a (possibly dead) entity has a component.

@@ -122,8 +122,8 @@ impl EntityManager {
     }
 
     pub fn offset_of(&self, e: Entity) -> Option<Offset> {
-        if self.is_alive(e) {
-            let datum = &self.data[index_of(e) as usize];
+        let datum = &self.data[index_of(e) as usize];
+        if datum.alive {
             Some(Offset::new(datum.granularity, datum.inner_off))
         } else {
             None

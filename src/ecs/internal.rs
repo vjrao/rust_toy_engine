@@ -30,60 +30,132 @@ impl Granularity {
     }
 }
 
-// Metadata about a slab.
-struct SlabMetadata {
+// Data related to a specific slab..
+struct Slab {
     // list of free blocks, in reverse-sorted order.
     block_tracker: Vector<usize, WorldAllocator>,
+    data: *mut u8,
     size: usize,
-    offset: usize,
+    block_size: usize,
+    alloc: WorldAllocator,
 }
 
-impl SlabMetadata {
-    fn new(alloc: WorldAllocator) -> Self {
-        SlabMetadata {
+impl Slab {
+    fn new(alloc: WorldAllocator, block_size: usize) -> Self {
+        Slab {
             block_tracker: Vector::with_alloc_and_capacity(alloc, INITIAL_CAPACITY),
+            data: ptr::null_mut(),
             size: 0,
-            offset: 0,
+            block_size: block_size,
+            alloc: alloc,
         }
     }
 
-    fn resize_to(&mut self, new_size: usize, offset: usize) {
+    // grows this slab.
+    fn grow(&mut self) {
+        use memory::Allocator;
+        
+        let new_size = if self.data.is_null() { INITIAL_CAPACITY } else  { self.size * 2 };
+        let kind = self.make_kind(new_size).expect("capacity overflow");
+            
+        let new_data = if self.data.is_null() {
+            unsafe {
+                match self.alloc.alloc(kind) {
+                    Ok(ptr) => *ptr,
+                    Err(_) => self.alloc.oom(),
+                }
+            }
+        } else {
+            // can unwrap this because the new kind is larger than this and succeeded.
+            let old_kind = self.make_kind(new_size).unwrap();                
+            unsafe {
+                match self.alloc.realloc(NonZero::new(self.data), old_kind, kind) {
+                    Ok(ptr) => *ptr,
+                    Err(_) => self.alloc.oom(),
+                } 
+            }
+        };
+        
         for idx in (self.size..new_size).rev() {
             self.block_tracker.push(idx);
         }
+        
         self.size = new_size;
-        self.offset = offset;
+        self.data = new_data;
     }
 
     // gets the index of the next free block and marks it used.
-    fn next_block(&mut self) -> Option<usize> {
-        self.block_tracker.pop()
-    }
-
-    // Acquire a known-free block. Panics if not actually free.
-    unsafe fn acquire_block(&mut self, idx: usize) {
-        // find the index of the block in the free list and then remove it.
-        let tracker_idx = self.search_tracker_for(idx).expect("Attempted to acquire live block.");
-        self.block_tracker.remove(tracker_idx);
+    // grows if necessary.
+    fn next_block(&mut self) -> usize {
+        if let Some(b) = self.block_tracker.pop() {
+            b
+        } else {
+            self.grow();
+            self.block_tracker.pop().unwrap()
+        }
     }
 
     // Mark a block to be free.
     unsafe fn mark_free(&mut self, idx: usize) {
+        // fast path for fairly common case.
+        let push = match self.block_tracker.last() {
+            Some(last) if *last > idx => true,
+            None => true,
+            _ => false,
+        };
+        
+        if push {
+            self.block_tracker.push(idx);
+            return;
+        }
+        
         // we shouldn't have found this block, since it isn't supposed to be in the freelist.
         if let Err(insertion_point) = self.search_tracker_for(idx) {
             self.block_tracker.insert(insertion_point, idx);
         }
     }
+    
+    // Gets a pointer to the block at the given offset,
+    // making no guarantees over whether it is dead or alive.
+    // panics if offset is out of bounds.
+    unsafe fn get_block(&self, idx: usize) -> *mut u8 {
+        assert!(idx < self.size);
+        
+        let block_size = block_size_with_header(self.block_size);
+        self.data.offset((idx * block_size) as isize)
+    }
 
     // whether the block at index `idx` is alive.
     fn is_alive(&self, idx: usize) -> bool {
-        self.search_tracker_for(idx).is_err()
+        idx < self.size && self.search_tracker_for(idx).is_err()
+    }
+    
+    // creates an allocation request suitable for the given number of blocks.
+    fn make_kind(&self, size: usize) -> Option<::memory::Kind> {
+        use memory::Kind;
+        
+        let sized = Kind::array::<u8>(size * block_size_with_header(self.block_size));
+        unsafe { sized.map(|k| k.align_to(NonZero::new(COMPONENT_ALIGN))) }
     }
 
     #[inline]
     fn search_tracker_for(&self, idx: usize) -> Result<usize, usize> {
         self.block_tracker.binary_search_by(|probe| probe.cmp(&idx).reverse())
     }
+}
+
+impl Drop for Slab {
+    fn drop(&mut self) {
+        use memory::Allocator;
+        
+        if !self.data.is_null() {
+            if let Some(kind) = self.make_kind(self.size) {
+                unsafe {
+                    let _ = self.alloc.dealloc(NonZero::new(self.data), kind);
+                }
+            }
+        }
+    } 
 }
 
 const PADDING_SIZE: usize = COMPONENT_ALIGN - 8;
@@ -385,248 +457,103 @@ impl BlockHandle {
 // It is a contiguous block of memory logically separated into "slabs" of the granularities above.
 // Each granularity is given the same number of possible entries.
 pub struct Blob {
-    data: Option<*mut u8>,
-    data_kind: Option<::memory::Kind>,
     blocks_per_slab: usize,
     alloc: WorldAllocator,
 
-    small: SlabMetadata,
-    medium: SlabMetadata,
-    large: SlabMetadata,
+    small: Slab,
+    medium: Slab,
+    large: Slab,
 }
 
 impl Blob {
     // Create a new blob. This does not allocate.
     pub fn new(alloc: WorldAllocator) -> Self {
         Blob {
-            data: None,
-            data_kind: None,
             blocks_per_slab: 0,
             alloc: alloc,
 
-            small: SlabMetadata::new(alloc),
-            medium: SlabMetadata::new(alloc),
-            large: SlabMetadata::new(alloc),
+            small: Slab::new(alloc, SMALL_SIZE),
+            medium: Slab::new(alloc, MEDIUM_SIZE),
+            large: Slab::new(alloc, LARGE_SIZE),
         }
-    }
-
-    // get the offset of the "small" block.
-    #[inline]
-    fn small_offset(&self) -> usize {
-        self.small.offset
-    }
-
-    // get the offset of the "medium" block.
-    #[inline]
-    fn medium_offset(&self) -> usize {
-        self.medium.offset
-    }
-
-    // get the offset of the "large" block.
-    #[inline]
-    fn large_offset(&self) -> usize {
-        self.large.offset
     }
 
     // Returns the first free block in the given granularity's slab.
     // grows the buffer if necessary.
     pub fn next_block(&mut self, granularity: Granularity) -> BlockHandle {
-        // scan the given granularity's bookkeeping table to find the first free block.
-        let maybe_index = match granularity {
-            Granularity::Small => self.small.next_block(),
-            Granularity::Medium => self.medium.next_block(),
-            Granularity::Large => self.large.next_block(),
+        let slab = match granularity {
+            Granularity::Small => &mut self.small,
+            Granularity::Medium => &mut self.medium,
+            Granularity::Large => &mut self.large,
         };
-
-        let index = maybe_index.unwrap_or_else(|| {
-            // out of room. grow and grab the first newly-allocated block.
-            let old_num_blocks = self.blocks_per_slab;
-            self.grow();
-
-            debug_assert!(match granularity {
-                Granularity::Small => !self.small.is_alive(old_num_blocks),
-                Granularity::Medium => !self.medium.is_alive(old_num_blocks),
-                Granularity::Large => !self.large.is_alive(old_num_blocks),
-            });
-
-            // just grew. there's no way those blocks aren't free!
-            unsafe {
-                match granularity {
-                    Granularity::Small => self.small.acquire_block(old_num_blocks),
-                    Granularity::Medium => self.medium.acquire_block(old_num_blocks),
-                    Granularity::Large => self.large.acquire_block(old_num_blocks),
-                }
-            }
-
-            old_num_blocks
-        });
-
-        unsafe {
-            let (slab_start, block_size) = match granularity {
-                Granularity::Small => (self.small_offset(), block_size_with_header(SMALL_SIZE)),
-                Granularity::Medium => (self.medium_offset(), block_size_with_header(MEDIUM_SIZE)),
-                Granularity::Large => (self.large_offset(), block_size_with_header(LARGE_SIZE)),
-            };
-
-            // at this point, we've already either gotten a free block or grown the buffer if there
-            // weren't any. The data pointer is available.
-            let mut block_handle =
-                BlockHandle::from_raw(self.data
-                                          .unwrap()
-                                          .offset((slab_start + (index * block_size)) as isize),
-                                      granularity,
-                                      index);
-
-            block_handle.clear();
-            block_handle
-        }
-    }
-
-    // doubles the size of each slab.
-    pub fn grow(&mut self) {
-        use core::nonzero::NonZero;
-        use memory::{Allocator, Kind};
-
-        let new_size = if self.blocks_per_slab == 0 {
-            INITIAL_CAPACITY
-        } else {
-            self.blocks_per_slab * 2
-        };
-
-        // size of each slab.
-        let small_size = new_size * block_size_with_header(SMALL_SIZE);
-        let medium_size = new_size * block_size_with_header(MEDIUM_SIZE);
-        let large_size = new_size * block_size_with_header(LARGE_SIZE);
-
-        // slab allocation layouts.
-        // make sure they're all aligned.
-        unsafe {
-            let small_kind = Kind::array::<u8>(small_size)
-                                 .map(|kind| kind.align_to(NonZero::new(COMPONENT_ALIGN)))
-                                 .expect("capacity overflow");
-
-            let medium_kind = Kind::array::<u8>(medium_size)
-                                  .map(|kind| kind.align_to(NonZero::new(COMPONENT_ALIGN)))
-                                  .expect("capacity overflow");
-
-            let large_kind = Kind::array::<u8>(large_size)
-                                 .map(|kind| kind.align_to(NonZero::new(COMPONENT_ALIGN)))
-                                 .expect("capacity overflow");
-
-            // combine the allocations into one, accounting for any padding.
-            let (small_med, med_off) = small_kind.extend(medium_kind).expect("capacity overflow");
-            let (all_slabs, large_off) = small_med.extend(large_kind).expect("capacity overflow");
-
-            debug_assert!(*all_slabs.align() >= COMPONENT_ALIGN);
-
-            // perform the allocation, just diverge if out of memory.
-            let alloc_res = if let Some(ptr) = self.data.take() {
-                self.alloc.realloc(NonZero::new(ptr), self.data_kind.take().unwrap(), all_slabs)
-            } else {
-                self.alloc.alloc(all_slabs)
-            };
-
-            if alloc_res.is_err() {
-                self.alloc.oom()
-            }
-
-            self.data = Some(*alloc_res.unwrap());
-            self.data_kind = Some(all_slabs);
-
-            // update slab metadata
-            self.small.resize_to(new_size, 0);
-            self.medium.resize_to(new_size, med_off);
-            self.large.resize_to(new_size, large_off);
-
-            self.blocks_per_slab = new_size;
-        }
+        
+        let idx = slab.next_block();
+        let mut block = unsafe { BlockHandle::from_raw(slab.get_block(idx), granularity, idx) };
+        unsafe { block.clear() } // clear the block before we return it.
+        
+        block
     }
 
     // get a handle to live block. panics on index out of bounds.
     pub fn get_block(&self, offset: Offset) -> BlockHandle {
-        let (granularity, index) = (offset.granularity, offset.inner_off);
-        debug_assert!(match granularity {
-            Granularity::Small => self.small.is_alive(index),
-            Granularity::Medium => self.medium.is_alive(index),
-            Granularity::Large => self.large.is_alive(index),
-        });
-
-        let off = match granularity {
-            Granularity::Small => self.small_offset() + index * block_size_with_header(SMALL_SIZE),
-            Granularity::Medium => {
-                self.medium_offset() + index * block_size_with_header(MEDIUM_SIZE)
-            }
-            Granularity::Large => self.large_offset() + index * block_size_with_header(LARGE_SIZE),
-        };
-
-        let data_ptr = self.data.clone().expect("Block index out of bounds");
-        unsafe { BlockHandle::from_raw(data_ptr.offset(off as isize), granularity, index) }
+        let (gran, idx) = offset.into_parts();
+        unsafe {
+            let slab = match gran {
+                Granularity::Small => &self.small,
+                Granularity::Medium => &self.medium,
+                Granularity::Large => &self.large,
+            };
+            
+            debug_assert!(slab.is_alive(idx), "Attempted to get handle to dead block.");
+            let block_ptr = slab.get_block(idx);
+            
+            BlockHandle::from_raw(block_ptr, gran, idx) 
+        }
     }
 
     // Free a block. It must not be used again until it is next allocated.
     pub unsafe fn free_block(&mut self, block: BlockHandle) {
-        let index = block.index;
-        debug_assert!(match block.granularity {
-                          Granularity::Small => self.small.is_alive(index),
-                          Granularity::Medium => self.medium.is_alive(index),
-                          Granularity::Large => self.large.is_alive(index),
-                      },
-                      "Attempted to free dead block at {:?}",
-                      block.offset());
-
-        match block.granularity {
-            Granularity::Small => self.small.mark_free(index),
-            Granularity::Medium => self.medium.mark_free(index),
-            Granularity::Large => self.large.mark_free(index),
+        let (gran, idx) = (block.granularity, block.index);
+        
+        match gran {
+            Granularity::Small => self.small.mark_free(idx),
+            Granularity::Medium => self.medium.mark_free(idx),
+            Granularity::Large => self.large.mark_free(idx),
         }
     }
 
     // Promote a block to a higher granularity, growing if necessary.
     // Returns a handle to the new block.
-    pub unsafe fn promote_block(&mut self,
-                                block: BlockHandle,
-                                new_gran: Granularity)
-                                -> BlockHandle {
-        if block.granularity == Granularity::Large {
-            panic!("Attempted to promote max-sized block")
-        }
-        let mut new_handle = self.next_block(new_gran);
-
-        let size = block.granularity.size();
+    pub unsafe fn promote_block(&mut self, block: BlockHandle, new_gran: Granularity) -> BlockHandle {
+        let old_size = block.granularity.size();
         let new_size = new_gran.size();
-        ::std::ptr::copy_nonoverlapping(*block.header as *mut u8,
-                                        *new_handle.header as *mut u8,
-                                        block_size_with_header(size));
-
-        // add a new, free slot to the end.
-        new_handle.mark_free(size, new_size - size);
+        assert!(old_size < new_size, "Promote called with invalid arguments.");
+        assert!(block.granularity != Granularity::Large, "Attempted to promote max-size block.");
+        
+        let mut new_block = self.next_block(new_gran);
+        
+        // copy the data over, including the header to preserve freelist status, entity, etc.
+        let old_header_ptr = *block.header as *mut u8;
+        let new_header_ptr = *new_block.header as *mut u8;
+        ptr::copy_nonoverlapping(old_header_ptr, new_header_ptr, block_size_with_header(old_size));
+        
+        // add a free slot to the end to make the new memory available.
+        new_block.mark_free(old_size, new_size - old_size);
+        
+        // finally, free the old block and return the new.
         self.free_block(block);
-
-        new_handle
+        new_block
     }
 }
 
 unsafe impl Send for Blob {}
 unsafe impl Sync for Blob {}
 
-impl Drop for Blob {
-    fn drop(&mut self) {
-        use core::nonzero::NonZero;
-        use memory::Allocator;
-
-        unsafe {
-            if let Some(kind) = self.data_kind.take() {
-                let _ = self.alloc.dealloc(NonZero::new(self.data.unwrap()), kind);
-            }
-        }
-    }
-}
-
-// Since space is crucial to these structures, we will use
-// the two most significant bits of the index to signify whether
-// there is an entry for this component. We only allow entities
-// to have 8KB of component data, so 2^14 bits will easily suffice.
-// entity index is unused.
+// Low space usage is very desirable for these offset tables.
+// We limit the size of data blocks to be small enough that
+// any possible offset is less than u16::MAX.
+// we further limit the maximum offset to 14 bits,
+// but this is artificial. 
 const MAX_OFFSET: u16 = (1 << 15) - 1;
 const CLEARED: u16 = ::std::u16::MAX;
 
@@ -698,16 +625,4 @@ impl<T: Component> ComponentOffsetTable<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Blob, Granularity};
-    use ecs::world::WorldAllocator;
-    use memory::DefaultAllocator;
-
-    #[test]
-    fn grow_blob() {
-        let alloc = WorldAllocator(DefaultAllocator);
-        let mut blob = Blob::new(alloc);
-        for _ in 0..8 {
-            blob.grow();
-        }
-    }
 }

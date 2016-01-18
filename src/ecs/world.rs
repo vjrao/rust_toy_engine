@@ -177,7 +177,9 @@ impl<C: Components> State<C> {
                 } else {
                     unsafe {
                         let offset = match block.next_free(size) {
-                            Ok(offset) => offset,
+                            Ok(offset) => {
+                                offset
+                            }
 
                             Err(SlotError::NeedsPromote(new_gran)) => {
                                 block = self.blob.promote_block(block, new_gran);
@@ -212,7 +214,7 @@ impl<C: Components> State<C> {
             self.components.get_mut::<T>().remove(e).map(|off| unsafe {
                 if size == 0 {
                     // zero-sized types are all the same...right?
-                    // not allowed to transmute with unsubstituted type para,s 
+                    // not allowed to transmute with unsubstituted type params 
                     let zero = ();
                     ptr::read(&zero as *const _ as *const T)
                 } else {
@@ -322,6 +324,7 @@ impl<C: Components> World<C> {
 }
 
 /// A processor performs some specific task.
+///
 /// In the entity-component-system model of computation,
 /// a processor will iterate over all entities with some specific
 /// set of components and perform some action for each of them.
@@ -382,13 +385,13 @@ pub struct ProcessingGroup<'wh, 'sp, C: Components + 'wh> where 'sp: 'wh {
 }
 
 impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
-    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) {
-        let wh = WorldHandle {
-          state: self.world.state,
-          spawner: self.world.spawner,  
-        };
-        
-        self.world.spawner.submit(move |_| {
+    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) { 
+        let state = self.world.state;      
+        self.world.spawner.submit(move |sp| {
+            let wh = WorldHandle {
+                state: state,
+                spawner: sp,  
+            };
             p.process(wh);
         })
     }
@@ -421,6 +424,7 @@ impl WorldBuilder<Empty> {
 
 impl<T: PhantomComponents> WorldBuilder<T> {
     /// Add a component to the world.
+    ///
     /// This will panic if the same component is added more than once.
     pub fn with_component<C: Component>(self) -> WorldBuilder<ListEntry<PhantomData<C>, T>> {
         WorldBuilder {
@@ -457,7 +461,7 @@ impl<T: PhantomComponents> WorldBuilder<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{World, WorldBuilder};
+    use super::WorldBuilder;
     use ecs::Component;
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -490,7 +494,7 @@ mod tests {
     #[test]
     fn make_5k_entities() {
         let mut world = WorldBuilder::new().with_component::<Pos>().build();
-        let entities: Vec<_> = (0..(5 * 1024)).map(|_| world.next_entity()).collect();
+        let entities: Vec<_> = (0..(5*1024)).map(|_| world.next_entity()).collect();
         for entity in entities.iter().cloned() {
             assert!(!world.has_component::<Pos>(entity));
             assert!(world.set_component(entity, Pos::default()).is_none());

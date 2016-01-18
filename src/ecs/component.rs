@@ -14,7 +14,7 @@ use std::mem;
 
 use super::entity::Entity;
 use super::internal::ComponentOffsetTable;
-use super::world::{WorldAllocator};
+use super::world::WorldAllocator;
 use super::{COMPONENT_ALIGN, LARGE_SIZE};
 
 /// Components are arbitrary data associated with entities.
@@ -132,9 +132,9 @@ pub trait Components: Sized + Send + Sync {
     // we batch this because each component offset table may be located
     // somewhere else in memory, so we try to minimize cache misses.
     fn clear_components_for(&mut self, entities: &[Entity]);
-    
+
     // assert that all component dependencies are fulfilled.
-    // this is a pretty costly operation, so it will probably only be 
+    // this is a pretty costly operation, so it will probably only be
     // performed in debug mode.
     fn assert_dependencies<T: Components>(&self, top_level: &T, entity: Entity);
 }
@@ -149,7 +149,7 @@ impl Components for Empty {
     }
 
     fn clear_components_for(&mut self, _: &[Entity]) {}
-    
+
     fn assert_dependencies<T: Components>(&self, _: &T, _: Entity) {}
 }
 
@@ -180,16 +180,18 @@ impl<C: Component, P: Components> Components for ListEntry<ComponentOffsetTable<
 
         self.parent.clear_components_for(entities);
     }
-    
+
     fn assert_dependencies<T: Components>(&self, top_level: &T, entity: Entity) {
         if self.val.offset_of(entity).is_some() {
             if let Err(failed_name) = C::Dependencies::has_all(top_level, entity) {
-                panic!("Entity {} failed to have component {}.\n\
-                        Dependency required by component {}",
-                        entity, failed_name, unsafe { intrinsics::type_name::<C>() });
+                panic!("Entity {} failed to have component {}.\nDependency required by component \
+                        {}",
+                       entity,
+                       failed_name,
+                       unsafe { intrinsics::type_name::<C>() });
             }
         }
-        
+
         self.parent.assert_dependencies(top_level, entity);
     }
 }
@@ -201,7 +203,7 @@ impl<C: Component, P: Components> Components for ListEntry<ComponentOffsetTable<
 pub trait ComponentSet {
     /// Whether this component set contains the type T.
     fn contains<T: Component>() -> bool;
-    
+
     /// Whether an entity has all of the components in this set.
     /// This will either return Ok, or an error with the name of the first component it failed
     /// to have.
@@ -244,7 +246,7 @@ impl<T: Component> ComponentSet for T {
     fn contains<C: Component>() -> bool {
         TypeId::of::<C>() == TypeId::of::<T>()
     }
-    
+
     #[inline]
     fn has_all<C: Components>(components: &C, e: Entity) -> Result<(), &'static str> {
         if components.get::<T>().offset_of(e).is_none() {
@@ -276,13 +278,13 @@ mod tests {
 
     struct A;
     impl Component for A {}
-    
+
     struct B;
     impl Component for B {}
-    
+
     struct C;
     impl Component for C {}
-    
+
     struct D;
     impl Component for D {}
 

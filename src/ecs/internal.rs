@@ -54,10 +54,14 @@ impl Slab {
     // grows this slab.
     fn grow(&mut self) {
         use memory::Allocator;
-        
-        let new_size = if self.data.is_null() { INITIAL_CAPACITY } else  { self.size * 2 };
+
+        let new_size = if self.data.is_null() {
+            INITIAL_CAPACITY
+        } else {
+            self.size * 2
+        };
         let kind = self.make_kind(new_size).expect("capacity overflow");
-            
+
         let new_data = if self.data.is_null() {
             unsafe {
                 match self.alloc.alloc(kind) {
@@ -67,19 +71,19 @@ impl Slab {
             }
         } else {
             // can unwrap this because the new kind is larger than this and succeeded.
-            let old_kind = self.make_kind(new_size).unwrap();                
+            let old_kind = self.make_kind(new_size).unwrap();
             unsafe {
                 match self.alloc.realloc(NonZero::new(self.data), old_kind, kind) {
                     Ok(ptr) => *ptr,
                     Err(_) => self.alloc.oom(),
-                } 
+                }
             }
         };
-        
+
         for idx in (self.size..new_size).rev() {
             self.block_tracker.push(idx);
         }
-        
+
         self.size = new_size;
         self.data = new_data;
     }
@@ -103,24 +107,24 @@ impl Slab {
             None => true,
             _ => false,
         };
-        
+
         if push {
             self.block_tracker.push(idx);
             return;
         }
-        
+
         // we shouldn't have found this block, since it isn't supposed to be in the freelist.
         if let Err(insertion_point) = self.search_tracker_for(idx) {
             self.block_tracker.insert(insertion_point, idx);
         }
     }
-    
+
     // Gets a pointer to the block at the given offset,
     // making no guarantees over whether it is dead or alive.
     // panics if offset is out of bounds.
     unsafe fn get_block(&self, idx: usize) -> *mut u8 {
         assert!(idx < self.size);
-        
+
         let block_size = block_size_with_header(self.block_size);
         self.data.offset((idx * block_size) as isize)
     }
@@ -129,11 +133,11 @@ impl Slab {
     fn is_alive(&self, idx: usize) -> bool {
         idx < self.size && self.search_tracker_for(idx).is_err()
     }
-    
+
     // creates an allocation request suitable for the given number of blocks.
     fn make_kind(&self, size: usize) -> Option<::memory::Kind> {
         use memory::Kind;
-        
+
         let sized = Kind::array::<u8>(size * block_size_with_header(self.block_size));
         unsafe { sized.map(|k| k.align_to(NonZero::new(COMPONENT_ALIGN))) }
     }
@@ -147,7 +151,7 @@ impl Slab {
 impl Drop for Slab {
     fn drop(&mut self) {
         use memory::Allocator;
-        
+
         if !self.data.is_null() {
             if let Some(kind) = self.make_kind(self.size) {
                 unsafe {
@@ -155,7 +159,7 @@ impl Drop for Slab {
                 }
             }
         }
-    } 
+    }
 }
 
 const PADDING_SIZE: usize = COMPONENT_ALIGN - 8;
@@ -205,7 +209,7 @@ impl Offset {
             inner_off: offset,
         }
     }
-    
+
     pub fn into_parts(self) -> (Granularity, usize) {
         (self.granularity, self.inner_off)
     }
@@ -486,11 +490,11 @@ impl Blob {
             Granularity::Medium => &mut self.medium,
             Granularity::Large => &mut self.large,
         };
-        
+
         let idx = slab.next_block();
         let mut block = unsafe { BlockHandle::from_raw(slab.get_block(idx), granularity, idx) };
         unsafe { block.clear() } // clear the block before we return it.
-        
+
         block
     }
 
@@ -503,18 +507,18 @@ impl Blob {
                 Granularity::Medium => &self.medium,
                 Granularity::Large => &self.large,
             };
-            
+
             debug_assert!(slab.is_alive(idx), "Attempted to get handle to dead block.");
             let block_ptr = slab.get_block(idx);
-            
-            BlockHandle::from_raw(block_ptr, gran, idx) 
+
+            BlockHandle::from_raw(block_ptr, gran, idx)
         }
     }
 
     // Free a block. It must not be used again until it is next allocated.
     pub unsafe fn free_block(&mut self, block: BlockHandle) {
         let (gran, idx) = (block.granularity, block.index);
-        
+
         match gran {
             Granularity::Small => self.small.mark_free(idx),
             Granularity::Medium => self.medium.mark_free(idx),
@@ -524,22 +528,29 @@ impl Blob {
 
     // Promote a block to a higher granularity, growing if necessary.
     // Returns a handle to the new block.
-    pub unsafe fn promote_block(&mut self, block: BlockHandle, new_gran: Granularity) -> BlockHandle {
+    pub unsafe fn promote_block(&mut self,
+                                block: BlockHandle,
+                                new_gran: Granularity)
+                                -> BlockHandle {
         let old_size = block.granularity.size();
         let new_size = new_gran.size();
-        assert!(old_size < new_size, "Promote called with invalid arguments.");
-        assert!(block.granularity != Granularity::Large, "Attempted to promote max-size block.");
-        
+        assert!(old_size < new_size,
+                "Promote called with invalid arguments.");
+        assert!(block.granularity != Granularity::Large,
+                "Attempted to promote max-size block.");
+
         let mut new_block = self.next_block(new_gran);
-        
+
         // copy the data over, including the header to preserve freelist status, entity, etc.
         let old_header_ptr = *block.header as *mut u8;
         let new_header_ptr = *new_block.header as *mut u8;
-        ptr::copy_nonoverlapping(old_header_ptr, new_header_ptr, block_size_with_header(old_size));
-        
+        ptr::copy_nonoverlapping(old_header_ptr,
+                                 new_header_ptr,
+                                 block_size_with_header(old_size));
+
         // add a free slot to the end to make the new memory available.
         new_block.mark_free(old_size, new_size - old_size);
-        
+
         // finally, free the old block and return the new.
         self.free_block(block);
         new_block
@@ -553,7 +564,7 @@ unsafe impl Sync for Blob {}
 // We limit the size of data blocks to be small enough that
 // any possible offset is less than u16::MAX.
 // we further limit the maximum offset to 14 bits,
-// but this is artificial. 
+// but this is artificial.
 const MAX_OFFSET: u16 = (1 << 15) - 1;
 const CLEARED: u16 = ::std::u16::MAX;
 

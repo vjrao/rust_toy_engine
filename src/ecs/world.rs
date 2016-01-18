@@ -76,7 +76,7 @@ impl<C: Components> State<C> {
         if !self.is_alive(e) {
             return;
         }
-        
+
         if let Some(block_offset) = self.entities.offset_of(e) {
             let block = self.blob.get_block(block_offset);
             unsafe { self.blob.free_block(block) }
@@ -108,7 +108,7 @@ impl<C: Components> State<C> {
     fn has_component<T: Component>(&self, e: Entity) -> bool {
         self.is_alive(e) && self.components.get::<T>().offset_of(e).is_some()
     }
-    
+
     // whether a (possibly dead) entity has a component.
     // the caller should check that the entity is in fact alive before attempting
     // to use this offset.
@@ -177,9 +177,7 @@ impl<C: Components> State<C> {
                 } else {
                     unsafe {
                         let offset = match block.next_free(size) {
-                            Ok(offset) => {
-                                offset
-                            }
+                            Ok(offset) => offset,
 
                             Err(SlotError::NeedsPromote(new_gran)) => {
                                 block = self.blob.promote_block(block, new_gran);
@@ -229,18 +227,21 @@ impl<C: Components> State<C> {
             })
         })
     }
-    
+
     // Make a vector of all offsets which refer to blocks with entities that are both alive
     // and fulfill the predicate provided. Uses the given allocator to create the vector.
     fn all_which_fulfill<P, A>(&self, mut pred: P, alloc: A) -> Vector<Offset, A>
-    where P: FnMut(Entity) -> bool, A: Allocator {
+        where P: FnMut(Entity) -> bool,
+              A: Allocator
+    {
         let mut offsets = Vector::with_alloc(alloc);
         // probably could get better cache coherence by performing each step once
         // and using map_in_place.
-        let producer = self.entities.iter()
-            .filter(|e| pred(*e))
-            .filter_map(|e| self.entities.offset_of(e));
-            
+        let producer = self.entities
+                           .iter()
+                           .filter(|e| pred(*e))
+                           .filter_map(|e| self.entities.offset_of(e));
+
         offsets.extend(producer);
         offsets
     }
@@ -302,23 +303,25 @@ impl<C: Components> World<C> {
     pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
         self.state.get_mut().unwrap().remove_component(entity)
     }
-    
+
     /// Create an `ProcessingContext` and provide it to the supplied closure to execute
     /// processors.
-    pub fn process<F>(&mut self, f: F) where F: FnOnce(ProcessingContext<C>) {
+    pub fn process<F>(&mut self, f: F)
+        where F: FnOnce(ProcessingContext<C>)
+    {
         // this is an expensive call, so don't do it all the time.
         if cfg!(debug_assertions) {
             let state = self.state.get_mut().unwrap();
             for entity in state.entities.iter() {
-                state.components.assert_dependencies(&state.components, entity);   
+                state.components.assert_dependencies(&state.components, entity);
             }
         }
-        
+
         let ctxt = ProcessingContext {
             state: &self.state,
             pool: &mut self.pool,
         };
-        
+
         f(ctxt);
     }
 }
@@ -342,24 +345,22 @@ pub struct ProcessingContext<'a, C: Components + 'a> {
 
 impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
     /// Create an execution scope for executing a group of processors fully asynchronously.
-    pub fn process_group<F>(&mut self, f: F) where F: for <'wh, 'sp> FnOnce(ProcessingGroup<'wh, 'sp, C>) {
+    pub fn process_group<F>(&mut self, f: F)
+        where F: for<'wh, 'sp> FnOnce(ProcessingGroup<'wh, 'sp, C>)
+    {
         let state = self.state;
         self.pool.scope(move |spawner| {
             let wh = WorldHandle {
                 state: state,
                 spawner: spawner,
             };
-            
+
             // need the double scope here unfortunately.
             // it's ok, scopes are very cheap.
-            spawner.scope(move |_| {
-                f(ProcessingGroup {
-                    world: wh,
-                })
-            });
+            spawner.scope(move |_| f(ProcessingGroup { world: wh }));
         });
     }
-    
+
     /// Execute a processor which must do some work synchronously.
     /// This is not recommended to be used except when some task needs to be done on the main thread,
     /// e.g. rendering and collecting window events.
@@ -373,24 +374,26 @@ impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
                 state: state,
                 spawner: spawner,
             };
-            
+
             p.process(wh);
         })
     }
 }
 
 /// Used to dispatch groups of processors completely asynchronously.
-pub struct ProcessingGroup<'wh, 'sp, C: Components + 'wh> where 'sp: 'wh {
+pub struct ProcessingGroup<'wh, 'sp, C: Components + 'wh>
+    where 'sp: 'wh
+{
     world: WorldHandle<'wh, 'sp, C>,
 }
 
 impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
-    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) { 
-        let state = self.world.state;      
+    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) {
+        let state = self.world.state;
         self.world.spawner.submit(move |sp| {
             let wh = WorldHandle {
                 state: state,
-                spawner: sp,  
+                spawner: sp,
             };
             p.process(wh);
         })
@@ -399,7 +402,9 @@ impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
 
 /// Provides access to the world state with an API that facilitates easy multithreaded
 /// processing.
-pub struct WorldHandle<'wh, 'sp, C: Components + 'wh> where 'sp: 'wh {
+pub struct WorldHandle<'wh, 'sp, C: Components + 'wh>
+    where 'sp: 'wh
+{
     state: &'wh RwLock<State<C>>,
     spawner: &'wh Spawner<'sp, 'sp>,
 }
@@ -469,7 +474,7 @@ mod tests {
         x: i32,
         y: i32,
     }
-    
+
     impl Component for Pos {}
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -477,7 +482,7 @@ mod tests {
         x: i32,
         y: i32,
     }
-    
+
     impl Component for Vel {}
 
     #[test]
@@ -494,7 +499,7 @@ mod tests {
     #[test]
     fn make_5k_entities() {
         let mut world = WorldBuilder::new().with_component::<Pos>().build();
-        let entities: Vec<_> = (0..(5*1024)).map(|_| world.next_entity()).collect();
+        let entities: Vec<_> = (0..(5 * 1024)).map(|_| world.next_entity()).collect();
         for entity in entities.iter().cloned() {
             assert!(!world.has_component::<Pos>(entity));
             assert!(world.set_component(entity, Pos::default()).is_none());

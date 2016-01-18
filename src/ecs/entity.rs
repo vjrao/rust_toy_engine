@@ -92,7 +92,7 @@ impl EntityManager {
                 alive: true,
                 gen: 0,
                 granularity: gran,
-                inner_off: off
+                inner_off: off,
             });
             let idx = self.data.len() - 1;
             Entity::new(idx as u32, 0)
@@ -117,9 +117,10 @@ impl EntityManager {
                 } else {
                     None
                 }
-            }).is_some()
+            })
+            .is_some()
     }
-    
+
     pub fn offset_of(&self, e: Entity) -> Option<Offset> {
         if self.is_alive(e) {
             let datum = &self.data[index_of(e) as usize];
@@ -143,7 +144,7 @@ impl EntityManager {
     pub fn size_hint(&self) -> usize {
         self.data.len()
     }
-    
+
     /// Get an iterator over all living entities.
     pub fn iter(&self) -> Entities {
         Entities {
@@ -161,7 +162,7 @@ pub struct Entities<'a> {
 
 impl<'a> Iterator for Entities<'a> {
     type Item = Entity;
-    
+
     fn next(&mut self) -> Option<Entity> {
         while let Some(data) = self.slice.get(self.cur_idx) {
             if data.alive {
@@ -170,7 +171,7 @@ impl<'a> Iterator for Entities<'a> {
                 self.cur_idx += 1;
             }
         }
-        
+
         None
     }
 }

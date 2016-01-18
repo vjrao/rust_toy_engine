@@ -240,14 +240,14 @@ impl<T, A: Allocator + Default> FromIterator<T> for Vector<T, A> {
 }
 
 impl<T, A: Allocator> Extend<T> for Vector<T, A> {
-    fn extend<I: IntoIterator<Item=T>>(&mut self, iterable: I) {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iterable: I) {
         let mut iter = iterable.into_iter();
         while let Some(item) = iter.next() {
             if self.len() == self.capacity() {
                 let (lower, _) = iter.size_hint();
                 self.reserve(lower.saturating_add(1));
             }
-            
+
             self.push(item);
         }
     }

@@ -212,7 +212,7 @@ impl<C: Components> State<C> {
             self.components.get_mut::<T>().remove(e).map(|off| unsafe {
                 if size == 0 {
                     // zero-sized types are all the same...right?
-                    // not allowed to transmute with unsubstituted type para,s 
+                    // not allowed to transmute with unsubstituted type params 
                     let zero = ();
                     ptr::read(&zero as *const _ as *const T)
                 } else {
@@ -322,6 +322,7 @@ impl<C: Components> World<C> {
 }
 
 /// A processor performs some specific task.
+///
 /// In the entity-component-system model of computation,
 /// a processor will iterate over all entities with some specific
 /// set of components and perform some action for each of them.
@@ -421,6 +422,7 @@ impl WorldBuilder<Empty> {
 
 impl<T: PhantomComponents> WorldBuilder<T> {
     /// Add a component to the world.
+    ///
     /// This will panic if the same component is added more than once.
     pub fn with_component<C: Component>(self) -> WorldBuilder<ListEntry<PhantomData<C>, T>> {
         WorldBuilder {

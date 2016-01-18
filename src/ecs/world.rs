@@ -177,7 +177,9 @@ impl<C: Components> State<C> {
                 } else {
                     unsafe {
                         let offset = match block.next_free(size) {
-                            Ok(offset) => offset,
+                            Ok(offset) => {
+                                offset
+                            }
 
                             Err(SlotError::NeedsPromote(new_gran)) => {
                                 block = self.blob.promote_block(block, new_gran);
@@ -492,7 +494,7 @@ mod tests {
     #[test]
     fn make_5k_entities() {
         let mut world = WorldBuilder::new().with_component::<Pos>().build();
-        let entities: Vec<_> = (0..(5 * 1024)).map(|_| world.next_entity()).collect();
+        let entities: Vec<_> = (0..(5*1024)).map(|_| world.next_entity()).collect();
         for entity in entities.iter().cloned() {
             assert!(!world.has_component::<Pos>(entity));
             assert!(world.set_component(entity, Pos::default()).is_none());

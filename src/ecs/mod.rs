@@ -23,6 +23,8 @@ pub use self::world::{Processor, ProcessingContext, ProcessingGroup, World, Worl
 const COMPONENT_ALIGN: usize = 16;
 
 // Sizes of blocks in each slab.
+// making any of these larger than 8192 may require
+// modifications to internal::ComponentOffsetTable.
 const SMALL_SIZE: usize = 512;
 const MEDIUM_SIZE: usize = 2048;
 const LARGE_SIZE: usize = 8192;

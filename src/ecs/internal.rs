@@ -97,6 +97,18 @@ impl Slab {
 
     // Mark a block to be free.
     unsafe fn mark_free(&mut self, idx: usize) {
+        // fast path for fairly common case.
+        let push = match self.block_tracker.last() {
+            Some(last) if *last > idx => true,
+            None => true,
+            _ => false,
+        };
+        
+        if push {
+            self.block_tracker.push(idx);
+            return;
+        }
+        
         // we shouldn't have found this block, since it isn't supposed to be in the freelist.
         if let Err(insertion_point) = self.search_tracker_for(idx) {
             self.block_tracker.insert(insertion_point, idx);

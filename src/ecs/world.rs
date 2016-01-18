@@ -385,13 +385,13 @@ pub struct ProcessingGroup<'wh, 'sp, C: Components + 'wh> where 'sp: 'wh {
 }
 
 impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
-    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) {
-        let wh = WorldHandle {
-          state: self.world.state,
-          spawner: self.world.spawner,  
-        };
-        
-        self.world.spawner.submit(move |_| {
+    pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) { 
+        let state = self.world.state;      
+        self.world.spawner.submit(move |sp| {
+            let wh = WorldHandle {
+                state: state,
+                spawner: sp,  
+            };
             p.process(wh);
         })
     }
@@ -461,7 +461,7 @@ impl<T: PhantomComponents> WorldBuilder<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{World, WorldBuilder};
+    use super::WorldBuilder;
     use ecs::Component;
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

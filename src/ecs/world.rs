@@ -5,13 +5,69 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use super::component::{Component, Components, Empty, ListEntry, make_empty, PhantomComponents};
+use super::component::{Component, Components, ComponentSet, Empty, ListEntry, make_empty, PhantomComponents};
 
 use super::entity::{Entity, EntityManager, MIN_UNUSED};
 
 use super::internal::{Blob, Granularity, Offset, SlotError};
 
 use jobsteal::{WorkPool, Spawner};
+
+/// Used to build a world with the given components.
+pub struct WorldBuilder<T: PhantomComponents> {
+    phantoms: T,
+    /// The number of threads to create the thread pool with.
+    pub num_threads: usize,
+}
+
+impl WorldBuilder<Empty> {
+    // Creates a new world builder with no components and one thread for every logical CPU.
+    pub fn new() -> Self {
+        WorldBuilder {
+            phantoms: make_empty(),
+            // may want to get physical cores.
+            num_threads: ::num_cpus::get(),
+        }
+    }
+}
+
+impl<T: PhantomComponents> WorldBuilder<T> {
+    /// Add a component to the world.
+    ///
+    /// This will panic if the same component is added more than once.
+    pub fn with_component<C: Component>(self) -> WorldBuilder<ListEntry<PhantomData<C>, T>> {
+        WorldBuilder {
+            phantoms: self.phantoms.push::<C>(),
+            num_threads: self.num_threads,
+        }
+    }
+
+    /// Set the number of threads to create the internal thread pool with.
+    pub fn num_threads(mut self, threads: usize) -> Self {
+        self.num_threads = threads;
+        self
+    }
+
+    /// Consume this builder and create a world.
+    /// Panics if it fails to create the thread pool.
+    pub fn build(self) -> World<T::Components> {
+        let alloc = WorldAllocator(DefaultAllocator);
+        let components = self.phantoms.into_components(alloc);
+        let state = State {
+            components: components,
+            entities: EntityManager::new(alloc),
+            blob: Blob::new(alloc),
+            dead_entities: Vector::with_alloc_and_capacity(alloc, MIN_UNUSED),
+            alloc: alloc,
+        };
+
+        World {
+            state: RwLock::new(state),
+            pool: WorkPool::new(self.num_threads).unwrap(),
+            alloc: alloc,
+        }
+    }
+}
 
 /// The world's allocator: for long term storage.
 ///
@@ -256,6 +312,7 @@ impl<C: Components> State<C> {
 pub struct World<C: Components> {
     state: RwLock<State<C>>,
     pool: WorkPool,
+    alloc: WorldAllocator,
 }
 
 impl<C: Components> World<C> {
@@ -321,6 +378,7 @@ impl<C: Components> World<C> {
         let ctxt = ProcessingContext {
             state: &self.state,
             pool: &mut self.pool,
+            alloc: self.alloc,
         };
 
         f(ctxt);
@@ -342,6 +400,8 @@ pub trait Processor {
 pub struct ProcessingContext<'a, C: Components + 'a> {
     state: &'a RwLock<State<C>>,
     pool: &'a mut WorkPool,
+    // FIXME:add a temporary allocator as well.
+    alloc: WorldAllocator,
 }
 
 impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
@@ -349,16 +409,15 @@ impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
     pub fn process_group<F>(&mut self, f: F)
         where F: for<'wh, 'sp> FnOnce(ProcessingGroup<'wh, 'sp, C>)
     {
-        let state = self.state;
+        let (state, alloc) = (self.state, self.alloc);
         self.pool.scope(move |spawner| {
             let wh = WorldHandle {
                 state: state,
                 spawner: spawner,
+                alloc: alloc,
             };
-
-            // need the double scope here unfortunately.
-            // it's ok, scopes are very cheap.
-            spawner.scope(move |_| f(ProcessingGroup { world: wh }));
+            
+            f(ProcessingGroup { world: wh });
         });
     }
 
@@ -369,11 +428,12 @@ impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
     /// this will block execution until the processor is 100% complete, rather than moving onto the 
     /// next.
     pub fn process_sync<P: Processor>(&mut self, p: &mut P) {
-        let state = self.state;
+        let (state, alloc) = (self.state, self.alloc);
         self.pool.scope(move |spawner| {
             let wh = WorldHandle {
                 state: state,
                 spawner: spawner,
+                alloc: alloc,
             };
 
             p.process(wh);
@@ -389,12 +449,14 @@ pub struct ProcessingGroup<'wh, 'sp, C: Components + 'sp>
 }
 
 impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
+    /// Submit a processor to be run completely asynchronously.
     pub fn process<P: Processor + Send>(&'sp self, p: &'sp mut P) {
-        let state = self.world.state;
+        let (state, alloc) = (self.world.state, self.world.alloc);
         self.world.spawner.submit(move |sp| {
             let wh = WorldHandle {
                 state: state,
                 spawner: sp,
+                alloc: alloc,
             };
             p.process(wh);
         })
@@ -469,6 +531,8 @@ pub struct WorldHandle<'wh, 'sp, C: Components + 'sp>
 {
     state: &'wh RwLock<State<C>>,
     spawner: &'wh Spawner<'sp, 'sp>,
+    alloc: WorldAllocator,
+    // FIXME: Also use a FrameAllocator?
 }
 
 impl<'wh, 'sp: 'wh, C: Components + 'sp> WorldHandle<'wh, 'sp, C> {
@@ -530,67 +594,52 @@ impl<'wh, 'sp: 'wh, C: Components + 'sp> WorldHandle<'wh, 'sp, C> {
     pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
         self.state.write().unwrap().remove_component(entity)
     }
-}
-
-/// Used to build a world with the given components.
-pub struct WorldBuilder<T: PhantomComponents> {
-    phantoms: T,
-    /// The number of threads to create the thread pool with.
-    pub num_threads: usize,
-}
-
-impl WorldBuilder<Empty> {
-    // Creates a new world builder with no components and one thread for every logical CPU.
-    pub fn new() -> Self {
-        WorldBuilder {
-            phantoms: make_empty(),
-            // may want to get physical cores.
-            num_threads: ::num_cpus::get(),
+    
+    /// Select all entities which have all the components in the provided set.
+    /// You can use the provided object
+    pub fn all_with<Set: ComponentSet>(&'wh self) -> AllWith<'wh, 'sp, Set, C> {
+        AllWith {
+            world: self,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<T: PhantomComponents> WorldBuilder<T> {
-    /// Add a component to the world.
-    ///
-    /// This will panic if the same component is added more than once.
-    pub fn with_component<C: Component>(self) -> WorldBuilder<ListEntry<PhantomData<C>, T>> {
-        WorldBuilder {
-            phantoms: self.phantoms.push::<C>(),
-            num_threads: self.num_threads,
+/// A lazily evaluated filter for 
+pub struct AllWith<'wh, 'sp: 'wh, Set, C>
+where Set: ComponentSet + 'sp, C: Components + 'sp {
+    world: &'wh WorldHandle<'wh, 'sp, C>,
+    _marker: PhantomData<Set>,
+}
+
+impl<'wh, 'sp: 'wh, Set, C> AllWith<'wh, 'sp, Set, C>
+where Set: ComponentSet + 'sp, C: Components + 'sp {
+    /// Iterate over all of the entities with the provided set of components synchronously,
+    /// producing an action for each.
+    pub fn for_each<F, A>(self, f: F) -> Vector<A, WorldAllocator>
+    where F: Fn(Entity) -> A {
+        let state = self.world.state.read().unwrap();
+        let components = &state.components;
+        let mut offsets = state.all_which_fulfill(|e| Set::has_all(components, e).is_ok(), self.world.alloc);
+        // probably can optimize by quicksorting here rather than insertion sort.
+        offsets.sort();
+        
+        let mut actions = Vector::with_alloc_and_capacity(self.world.alloc, offsets.len());
+        
+        for off in offsets {
+            let block = state.blob.get_block(off);
+            actions.push(f(block.entity()));
         }
-    }
-
-    /// Set the number of threads to create the internal thread pool with.
-    pub fn num_threads(mut self, threads: usize) -> Self {
-        self.num_threads = threads;
-        self
-    }
-
-    /// Consume this builder and create a world.
-    /// Panics if it fails to create the thread pool.
-    pub fn build(self) -> World<T::Components> {
-        let alloc = WorldAllocator(DefaultAllocator);
-        let components = self.phantoms.into_components(alloc);
-        let state = State {
-            components: components,
-            entities: EntityManager::new(alloc),
-            blob: Blob::new(alloc),
-            dead_entities: Vector::with_alloc_and_capacity(alloc, MIN_UNUSED),
-            alloc: alloc,
-        };
-
-        World {
-            state: RwLock::new(state),
-            pool: WorkPool::new(self.num_threads).unwrap(),
-        }
-    }
+        
+        actions
+    } 
+    
 }
 
 #[cfg(test)]
 mod tests {
-    use super::WorldBuilder;
-    use ecs::Component;
+    use ecs::*;
+    use memory::Vector;
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     struct Pos {
@@ -652,5 +701,53 @@ mod tests {
         }
 
         world.destroy_entity(e);
+    }
+    
+    #[test]
+    fn sync_movement_processing() {
+        struct MovementProcessor;
+        impl Processor for MovementProcessor {
+            fn process<'a, 'b, C: Components + 'a>(&mut self, mut world: WorldHandle<'a, 'b, C>) {
+                struct NewPos(Entity, Pos);
+                
+                let actions = world.all_with::<(Pos, Vel)>().for_each(|e| {
+                    let pos = world.get_component::<Pos>(e).unwrap();
+                    let vel = world.get_component::<Vel>(e).unwrap();
+                    
+                    NewPos(e, Pos { x: pos.x + vel.x, y: pos.y + vel.y })
+                });
+                
+                // TODO: lock write pre-emptively.
+                for NewPos(e, pos) in actions {
+                    world.set_component(e, pos);
+                }
+            }
+        }
+        
+        let mut world = WorldBuilder::new()
+            .with_component::<Pos>()
+            .with_component::<Vel>()
+            .build();
+            
+        let mut entities = Vector::new();
+            
+        for i in 0..1000 {
+            let e = world.next_entity();
+            world.set_component(e, Pos { x: i * 10, y: i * 10 });
+            world.set_component(e, Vel { x: -i, y: -i });
+            entities.push(e);
+        }
+        
+        let mut movement = MovementProcessor;
+        for i in 0..10 {
+            println!("processing round {}", i);
+            world.process(|mut ctxt| {
+                ctxt.process_sync(&mut movement);
+            })
+        }
+        
+        for e in entities {
+            assert_eq!(*world.get_component::<Pos>(e).unwrap(), Pos { x: 0, y: 0 });
+        }
     }
 }

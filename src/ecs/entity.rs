@@ -165,10 +165,9 @@ impl<'a> Iterator for Entities<'a> {
 
     fn next(&mut self) -> Option<Entity> {
         while let Some(data) = self.slice.get(self.cur_idx) {
+            self.cur_idx += 1;
             if data.alive {
                 return Some(Entity::new(self.cur_idx as u32, data.gen));
-            } else {
-                self.cur_idx += 1;
             }
         }
 

@@ -450,6 +450,11 @@ impl BlockHandle {
     pub fn offset(&self) -> Offset {
         Offset::new(self.granularity, self.index)
     }
+    
+    // Returns the entity stored in this header.
+    pub fn entity(&self) -> Entity {
+        unsafe { (**self.header).entity }
+    }
 
     // Initialize the block.
     pub unsafe fn initialize(&mut self, entity: Entity) {
@@ -601,7 +606,7 @@ impl<T: Component> ComponentOffsetTable<T> {
     pub fn set(&mut self, entity: Entity, offset: u16) {
         let idx = index_of(entity) as usize;
         // there shouldn't be any offsets that use this many bits.
-        debug_assert!(idx <= MAX_OFFSET as usize);
+        debug_assert!(offset <= MAX_OFFSET);
 
         self.ensure_capacity(idx);
         self.offsets[idx] = offset;

@@ -11,11 +11,11 @@
 mod component;
 mod entity;
 mod internal;
-mod world;
+pub mod world;
 
-pub use self::component::{Component, ComponentSet};
+pub use self::component::{Component, Components, ComponentSet};
 pub use self::entity::Entity;
-pub use self::world::{Processor, ProcessingContext, ProcessingGroup, World, WorldBuilder,
+pub use self::world::{Processor, World, WorldBuilder,
                       WorldHandle};
 
 // Maximum guaranteed component alignment.

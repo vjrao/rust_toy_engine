@@ -2,7 +2,8 @@ use memory::allocator::{self, Address, Allocator, DefaultAllocator, Kind};
 use memory::Vector;
 
 use std::marker::PhantomData;
-use std::sync::RwLock;
+use std::ops::{Deref, DerefMut};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use super::component::{Component, Components, Empty, ListEntry, make_empty, PhantomComponents};
 
@@ -381,7 +382,7 @@ impl<'a, C: Components + 'a> ProcessingContext<'a, C> {
 }
 
 /// Used to dispatch groups of processors completely asynchronously.
-pub struct ProcessingGroup<'wh, 'sp, C: Components + 'wh>
+pub struct ProcessingGroup<'wh, 'sp, C: Components + 'sp>
     where 'sp: 'wh
 {
     world: WorldHandle<'wh, 'sp, C>,
@@ -400,13 +401,135 @@ impl<'wh, 'sp, C: Components + 'wh> ProcessingGroup<'wh, 'sp, C> {
     }
 }
 
+/// An immutable reference to a component.
+// it's impossible to get a reference to the component and then 
+// move the read guard into the ComponentRef as well,
+// so we are presented with two options:
+// perform the lookup every single time (slow),
+// or use a little bit of easily verified unsafe code.
+//
+// the component pointer is guaranteed not to be invalidated while we 
+// have a read guard.
+pub struct ComponentRef<'a, T: Component + 'a, C: Components + 'a> {
+    read_guard: RwLockReadGuard<'a, State<C>>,
+    comp: *const T,
+}
+
+impl<'a, T: Component + 'a, C: Components + 'a> Deref for ComponentRef<'a, T, C> {
+    type Target = T;
+    
+    fn deref(&self) -> &T {
+        unsafe { &*self.comp }
+    }
+}
+
+/// A mutable reference to a component.
+// same story as the above.
+pub struct ComponentRefMut<'a, T: Component + 'a, C: Components + 'a> {
+    write_guard: RwLockWriteGuard<'a, State<C>>,
+    comp: *mut T,
+}
+
+impl<'a, T: Component + 'a, C: Components + 'a> Deref for ComponentRefMut<'a, T, C> {
+    type Target = T;
+    
+    fn deref(&self) -> &T {
+        unsafe { &*self.comp }
+    }
+}
+
+impl<'a, T: Component + 'a, C: Components + 'a> DerefMut for ComponentRefMut<'a, T, C> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *self.comp }
+    }
+}
+
 /// Provides access to the world state with an API that facilitates easy multithreaded
-/// processing.
-pub struct WorldHandle<'wh, 'sp, C: Components + 'wh>
+/// processing, as well as a slower API for random access to entities.
+///
+/// For general-purpose processing, the parallel iterator API (still work-in-progress)
+/// should be used. Random access functions which can modify state will block until all 
+/// currently-reading processors are done, only to release the exclusive access immediately
+/// afterwards. As such, they are likely to harm performance if relied upon solely.
+///
+/// The general philosophy behind concurrently executing processors can be stated like so:
+/// Ideally, every processor will be split into a read-phase and a write-phase.
+/// During the read-phase, the processor will use multiple threads to iterate over
+/// all desired entities, gathering data and deferring changes until the write-phase.
+/// Multiple processors may be in the read-phase at once.
+///
+/// Once the processor has gathered all desired information, it will enter its 
+/// write-phase, where it obtains exclusive access to the world state and quickly
+/// applies all the changes which it has deferred.
+///
+/// This design is not enforced (processors aren't required to use any kind of parallelism),
+/// but the WorldHandle aims to make it very easy to use.
+pub struct WorldHandle<'wh, 'sp, C: Components + 'sp>
     where 'sp: 'wh
 {
     state: &'wh RwLock<State<C>>,
     spawner: &'wh Spawner<'sp, 'sp>,
+}
+
+impl<'wh, 'sp: 'wh, C: Components + 'sp> WorldHandle<'wh, 'sp, C> {
+    /// Create a new entity.
+    pub fn next_entity(&mut self) -> Entity {
+        self.state.write().unwrap().next_entity()
+    }
+
+    /// Destroy an entity.
+    pub fn destroy_entity(&mut self, e: Entity) {
+        self.state.write().unwrap().destroy_entity(e);
+    }
+
+    /// Destroy all entities in the provided iterator.
+    pub fn destroy_entities<I>(&mut self, entities: I)
+        where I: IntoIterator<Item = Entity>
+    {
+        self.state.write().unwrap().destroy_entities(entities);
+    }
+
+    /// Attempt to get a reference to an entity's component data.
+    pub fn get_component<T: Component>(&self, entity: Entity) -> Option<ComponentRef<T, C>> {
+        let read_guard = self.state.read().unwrap();
+        // we end the borrow on the read_guard by turning the reference into a raw pointer,
+        // but we move the guard into the return value as well -- ensuring that the pointer
+        // remains alive.
+        let comp_ptr = read_guard.get_component(entity).map(|c| c as *const T);
+        comp_ptr.map(|ptr| ComponentRef {
+            read_guard: read_guard,
+            comp: ptr
+        })
+    }
+
+    /// Attempt to get a mutable reference to an entity's component data.
+    /// As long as this reference is active, no processors will be able to read or write
+    /// any other components.
+    pub fn get_mut_component<T: Component>(&mut self, entity: Entity) -> Option<ComponentRefMut<T, C>> {
+        let mut write_guard = self.state.write().unwrap();
+        let comp_ptr = write_guard.get_mut_component(entity).map(|c| c as *mut T);
+        comp_ptr.map(|ptr| ComponentRefMut {
+            write_guard: write_guard,
+            comp: ptr
+        })
+    }
+
+    /// Whether an entity has a component.
+    pub fn has_component<T: Component>(&self, entity: Entity) -> bool {
+        self.state.read().unwrap().has_component::<T>(entity)
+    }
+
+    /// Manually set the component data for an entity.
+    /// Returns the old data, if it existed.
+    pub fn set_component<T: Component>(&mut self, entity: Entity, component: T) -> Option<T> {
+        self.state.write().unwrap().set_component(entity, component)
+    }
+
+    /// Manually remove the component data for an entity.
+    /// Returns the old data, if it existed.
+    pub fn remove_component<T: Component>(&mut self, entity: Entity) -> Option<T> {
+        self.state.write().unwrap().remove_component(entity)
+    }
 }
 
 /// Used to build a world with the given components.
